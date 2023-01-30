@@ -1,4 +1,4 @@
-use wipo
+use DBA
 go
 IF (object_id('LogEvent') IS NOT NULL)
 BEGIN
@@ -9,8 +9,8 @@ print 'Creating procedure: LogEvent'
 GO
 CREATE PROCEDURE LogEvent
 (
-  @Process       varchar(100),
-  @DatabaseName  varchar(50),
+  @Process       varchar(100)  = '',
+  @DatabaseName  varchar(50)   = '',
   @Description1  varchar(7000) = '',
   @Description2  varchar(7000) = '',
   @Description3  varchar(7000) = '',
@@ -20,13 +20,14 @@ CREATE PROCEDURE LogEvent
   @Description7  varchar(7000) = '',
   @Description8  varchar(7000) = '',
   @Description9  varchar(7000) = '',
-  @Description10 varchar(7000) = ''
+  @Description10 varchar(7000) = '',
+  @Print         char(1)       = 'N' -- (Y/N) set to Y to force printing of message, regardless of connecting client
 )
 as
 ---------------------------------------------------------------------------------------------------
--- Version:      1.0
 -- Date Created: February 19, 2008
 -- Author:       William McEvoy
+-- Version:      1.0
 --               
 -- Description:  This procedure is used to insert records into the EventLog table.
 --               
@@ -41,11 +42,17 @@ as
 -- Author:       William McEvoy
 -- Reason:       I added some date handling to the second parameter.
 ---------------------------------------------------------------------------------------------------
--- Version:      1.1
--- Date Revised: April 10, 2016
+-- Version       1.2
+-- Date Revised: August 11, 2016
 -- Author:       William McEvoy
--- Reason:       Added version number
+-- Reason:       Added code to display messages if called from powershell
 ---------------------------------------------------------------------------------------------------
+-- Version:      1.3
+-- Date Revised: January 29, 2023
+-- Author:       William McEvoy
+-- Reason:       Changed Process and DatabaseName to be optional parameters
+---------------------------------------------------------------------------------------------------
+-- Version:
 -- Date Revised: 
 -- Author:       
 -- Reason:       
@@ -78,6 +85,12 @@ select  @error       = 0,
 -- Fill in current database name if none supplied
 IF (@DatabaseName = '' OR @DatabaseName IS NULL)
   select @DatabaseName = db_name()
+
+if (@Process = '' or @Process IS NULL)
+  select @process = program_name from master.dbo.sysprocesses with (nolock) where spid = @@SPID 
+  
+
+  
 
 
 ---------------------------------------------------------------------
@@ -127,11 +140,9 @@ select @Description = isnull(replicate('    ',@@NestLevel-2),'') + @Description
 -- to cause those clients grief so we only send messages to the console if
 -- the client is a query based application like "Query Analyzer".
 
-IF EXISTS (select 1
-             from master.dbo.sysprocesses with (nolock)
-            where spid = @@SPID
-              and (lower(program_name) like '%Management Studio%')
-          )
+IF EXISTS (select 1 from master.dbo.sysprocesses with (nolock) 
+            where spid = @@SPID and (lower(program_name) like '%Management Studio%')
+          ) OR (@Print <> 'N')
 BEGIN
   print @Description
 END
@@ -155,5 +166,3 @@ IF (object_id('LogEvent') IS NOT NULL)
 ELSE
   print 'Procedure NOT created'
 GO
-
-
