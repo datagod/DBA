@@ -1,0 +1,31 @@
+-- Created by ChatGPT Feb 2023
+
+CREATE PROCEDURE [dbo].[ShowFiles] (@Path VARCHAR(255))
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Command VARCHAR(8000)
+    DECLARE @Files TABLE (FileName VARCHAR(255))
+
+    SET @Command = @Path + '\*.*'
+
+    INSERT INTO @Files
+    SELECT 
+        SUBSTRING(file, CHARINDEX('\', file) + 1, LEN(file)) AS FileName
+    FROM 
+        (
+            SELECT 
+                SUBSTRING(subdir, 0, CHARINDEX('\', subdir)) + '\' + [file] AS file
+            FROM 
+                (
+                    SELECT 
+                        SUBSTRING(dir, LEN(@Path) + 1, LEN(dir)) + '\' AS subdir,
+                        [file]
+                    FROM 
+                        xp_dirtree(@Command, 1, 1)
+                ) AS subdirs
+        ) AS files
+
+    SELECT * FROM @Files
+END
