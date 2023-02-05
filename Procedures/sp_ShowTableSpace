@@ -1,0 +1,59 @@
+-- created by ChatGPT February 2023
+-- Modified by William McEvoy 
+use master
+drop procedure sp_ShowTableSpace
+go
+
+create procedure sp_ShowTableSpace
+(
+ @TableName varchar(100) = '%'
+)
+as
+
+SELECT 
+    'Index' as 'ObjectType',
+    left(sc.name,35) as 'SchemaName',
+    isnull(left(i.name,35),'Heap') as 'ObjectName',
+    format(SUM(p.rows),'###,###,###,###') AS RowCounts, 
+    str((SUM(a.total_pages) * 8.0 / 1024),12,2) AS TotalSpaceMB,
+    str((SUM(a.total_pages) * 8.0 / 1024 / 1024),12,2) AS TotalSpaceGB
+FROM 
+    sys.tables t 
+    INNER JOIN sys.indexes i ON t.OBJECT_ID = i.object_id 
+    INNER JOIN sys.partitions p ON i.object_id = p.OBJECT_ID AND i.index_id = p.index_id 
+    INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id 
+    INNER JOIN sys.schemas sc on sc.schema_id = t.schema_id
+WHERE 
+    t.name = @TableName
+    
+GROUP BY 
+    sc.name, i.name
+
+UNION
+
+
+SELECT 
+    'Table' as 'ObjectType',
+    left(sc.name,35) as 'SchemaName',
+    left(t.name,35) as 'ObjectName',
+    format(SUM(p.rows),'###,###,###,###') AS RowCounts, 
+    str((SUM(a.total_pages) * 8.0 / 1024),12,2) AS TotalSpaceMB,
+    str((SUM(a.total_pages) * 8.0 / 1024 / 1024),12,2) AS TotalSpaceGB
+
+FROM 
+    sys.tables t 
+    INNER JOIN sys.indexes i ON t.OBJECT_ID = i.object_id 
+    INNER JOIN sys.partitions p ON i.object_id = p.OBJECT_ID AND i.index_id = p.index_id 
+    INNER JOIN sys.allocation_units a ON p.partition_id = a.container_id 
+    INNER JOIN sys.schemas sc on sc.schema_id = t.schema_id
+WHERE 
+    t.name = @TableName
+    
+GROUP BY 
+    sc.name, t.name
+order by 1 desc, 2,3
+
+go
+
+exec sp_ms_marksystemobject 'sp_ShowTableSpace'
+
