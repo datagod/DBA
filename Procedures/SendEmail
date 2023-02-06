@@ -1,0 +1,96 @@
+USE [DBA]
+
+ALTER procedure [dbo].[SendEmail]
+(
+  @EmailTo    varchar(500),
+  @EmailFrom  varchar(100) = '',
+  @Subject    varchar(100),
+  @Body       varchar(8000),
+  @Attachment varchar(500) = '',
+  @Importance varchar(10)  = 'NORMAL',
+  @HTML       char(1)      = 'N'
+)
+as
+ 
+---------------------------------------------------------------------------------------------------
+-- Date Created: October 15, 2009
+-- Author:       William McEvoy
+--               
+-- Description:  This stored procedure is used to send emails.
+--               
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: July 17, 2013
+-- Author:       William McEvoy
+-- Reason:       We now want to select the first profile, not just one with profile_id = 1
+--               in case that one was deleted.
+---------------------------------------------------------------------------------------------------
+-- Date Revised: February 6, 2023
+-- Author:       William McEvoy
+-- Reason:       Added ability to send HTML formatted emails
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+---------------------------------------------------------------------
+-- Validate input parameters                                       --
+---------------------------------------------------------------------
+
+IF (@EmailFrom is null or @EmailFrom = '')
+  select  @EmailFrom = '' 
+          + case 
+              when charindex('\',@@SERVERNAME) > 0 then left(@@SERVERNAME,charindex('\',@@SERVERNAME)) 
+              else @@SERVERNAME 
+            end
+          + '@core-mark.com'
+
+
+       
+       
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+declare @profile_name varchar(100),
+        @body_format  varchar(10)
+
+select  @profile_name = (select top 1 [name] from msdb.dbo.sysmail_profile order by profile_id),
+        @body_format  = 'text'
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+--                                                                 --
+---------------------------------------------------------------------
+
+print @profile_name
+print @EmailFrom
+print @EmailTo
+print @Subject
+print @Body
+
+
+IF (@HTML = 'Y')
+BEGIN
+  select @body_format = 'HTML', 
+         @body        = '<html><body style="font-family: Consolas, Monaco, monospace;">' + @body + '</body></html>'
+END
+
+
+exec msdb.dbo.sp_send_dbmail
+    @profile_name     = @profile_name,
+    @from_address     = @EmailFrom,
+    @recipients       = @EmailTo,
+    @subject          = @Subject,
+    @Body             = @Body,
+    @body_format      = @body_format,
+    @file_attachments = @Attachment,
+    @Importance       = @Importance
+    
+
