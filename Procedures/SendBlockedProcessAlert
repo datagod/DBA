@@ -41,8 +41,9 @@ declare @ReportString varchar(8000),
 
 
 select  @ReportString = '',
-        @Body         = '<PRE>Date: ' + convert(varchar(19),getdate(),120) + '<BR>' +
-                        'Server:    ' + upper(@@SERVERNAME) + '<BR>'+ '<BR>',
+        @Body         = '<PRE>' + 
+                        'Date:   ' + convert(varchar(19),getdate(),120) + '<BR>' +
+                        'Server: ' + upper(@@SERVERNAME) + '<BR>'+ '<BR>',
         @Subject      = 'Blocked Processes Detected: ' + upper(@@SERVERNAME),
         @EmailTo      = '',
         @EmailFrom    = '' 
