@@ -41,8 +41,8 @@ declare @ReportString varchar(8000),
 
 
 select  @ReportString = '',
-        @Body         = 'Date Generated: ' + convert(varchar(19),getdate(),120) + + char(13) + char(10) +
-                        'Server:         ' + upper(@@SERVERNAME) + char(13) + char(10) + char(13) + char(10),
+        @Body         = '<PRE>Date: ' + convert(varchar(19),getdate(),120) + '<BR>' +
+                        'Server:    ' + upper(@@SERVERNAME) + '<BR>'+ '<BR>',
         @Subject      = 'Blocked Processes Detected: ' + upper(@@SERVERNAME),
         @EmailTo      = '',
         @EmailFrom    = '' 
@@ -113,7 +113,7 @@ insert into @Results
          --'status'       = left(nt_username,20)
     from master.dbo.sysprocesses
     with (nolock)
---   where blocked > 0
+   where blocked > 0
 UNION 
   select 'loginame'     = left(loginame, 20),
          'hostname'     = left(hostname,20),
@@ -131,7 +131,7 @@ UNION
          --'status'       = left(nt_username,20)
     from master.dbo.sysprocesses
     with (nolock)
---   where spid in (select blocked from master.dbo.sysprocesses where blocked > 0)
+   where spid in (select blocked from master.dbo.sysprocesses where blocked > 0)
 
 
 --select * from @results
@@ -142,8 +142,9 @@ UNION
 ---------------------------------------------------------------------
 
 
-select @ReportString = 
-'LoginName            HostName             Database        SPID/BLCK ProgramName                    Command              LastBatch
+
+select @ReportString =
+'LoginName            HostName             Database        SPID/BLCK ProgramName                    Command              LastBatch         
 -------------------- -------------------- --------------- --------- ------------------------------ -------------------- -------------------
 '
 
@@ -154,10 +155,6 @@ select @ReportString = @ReportString
 
 
 
-
-
-
-
 ---------------------------------------------------------------------
 -- Send alert if required                                          --
 ---------------------------------------------------------------------
@@ -165,13 +162,16 @@ select @ReportString = @ReportString
 IF (@ReportString <> '')
 BEGIN
   print 'Blocked processes detected...'
-  select @Body = @Body + @ReportString
+  select @Body = @Body + @ReportString + '</PRE>'
 
+
+   
   exec DBA.dbo.SendEmail
     @EmailTo   = @EmailTo,
     @EmailFrom = @EmailFrom,
     @Subject   = @Subject,
-    @Body      = @Body
+    @Body      = @Body,
+    @HTML      = 'Y'
 
   print 'Email sent.'
 
@@ -180,3 +180,4 @@ ELSE
   print 'No failures detected...'
 GO
 
+exec SendBlockedProcessAlert
