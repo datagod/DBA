@@ -1,0 +1,182 @@
+use DBA
+IF (object_id('SendBlockedProcessAlert') IS NOT NULL)
+BEGIN
+  PRINT 'Dropping: SendBlockedProcessAlert'
+  DROP PROCEDURE SendBlockedProcessAlert     
+END
+GO
+PRINT 'Creating: SendBlockedProcessAlert'
+GO
+create procedure SendBlockedProcessAlert
+
+as
+ 
+---------------------------------------------------------------------------------------------------
+-- Date Created: February 5, 2023
+-- Author:       William McEvoy
+--               
+-- Description:  Email a short report of blocked processes.
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+---------------------------------------------------------------------
+-- Validate input parameters                                       --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+declare @ReportString varchar(8000),
+        @EmailTo      varchar(500),
+        @EmailFrom    varchar(100),
+        @Subject      varchar(100),
+        @Body         varchar(8000)
+
+
+select  @ReportString = '',
+        @Body         = 'Date Generated: ' + convert(varchar(19),getdate(),120) + + char(13) + char(10) +
+                        'Server:         ' + upper(@@SERVERNAME) + char(13) + char(10) + char(13) + char(10),
+        @Subject      = 'Blocked Processes Detected: ' + upper(@@SERVERNAME),
+        @EmailTo      = '',
+        @EmailFrom    = '' 
+
+
+
+declare @Results table 
+  ( LoginName    char(20),
+    HostName     char(20),
+    DatabaseName char(15),
+    spid         char(4),
+    blockid      char(4),
+    ProgramName  char(30),
+    Command      char(20),
+    LastBatch    char(19)
+)
+
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+-- Determine To/From addresses                                     --
+--                                                                 --
+-- Capture job information                                         --
+--                                                                 --
+-- Parse job information result set into a single string           --
+--                                                                 --
+-- Send alert if required                                          --
+--                                                                 --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- Determine To/From addresses                                     --
+---------------------------------------------------------------------
+
+
+-- Determine email address from server profile
+select top 1 @EmailFrom = email_address from msdb.dbo.sysmail_account
+
+-- Determine recipients
+select @EmailTo  = email_address + ';' from msdb.dbo.sysoperators
+
+
+print 'From: ' + @EmailFrom
+print 'To:   ' + @EMailTo
+
+---------------------------------------------------------------------
+-- Capture job information                                         --
+---------------------------------------------------------------------
+
+insert into @Results
+  select 'loginame'     = left(loginame, 20),
+         'hostname'     = left(hostname,20),
+         'database'     = left(db_name(dbid),15),
+         'spid'         = str(spid,4,0),
+         'block'        = str(blocked,4,0),
+         --'phys_io'      = str(physical_io,8,0),
+         --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
+         --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
+         'program_name' = left(program_name,30),
+         'command'      = left(cmd,20),
+         --'lastwaittype' = left(lastwaittype,25),
+         --'login_time'   = convert(char(19),login_time,120),
+         'last_batch'   = convert(char(19),last_batch,120)
+         --'status'       = left(nt_username,20)
+    from master.dbo.sysprocesses
+    with (nolock)
+--   where blocked > 0
+UNION 
+  select 'loginame'     = left(loginame, 20),
+         'hostname'     = left(hostname,20),
+         'database'     = left(db_name(dbid),15),
+         'spid'         = str(spid,4,0),
+         'block'        = str(blocked,4,0),
+         --'phys_io'      = str(physical_io,8,0),
+         --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
+         --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
+         'program_name' = left(program_name,30),
+         'command'      = left(cmd,20),
+         --'lastwaittype' = left(lastwaittype,25),
+         --'login_time'   = convert(char(19),login_time,120),
+         'last_batch'   = convert(char(19),last_batch,120)
+         --'status'       = left(nt_username,20)
+    from master.dbo.sysprocesses
+    with (nolock)
+--   where spid in (select blocked from master.dbo.sysprocesses where blocked > 0)
+
+
+--select * from @results
+
+
+---------------------------------------------------------------------
+-- Parse job information result set into a single string           --
+---------------------------------------------------------------------
+
+
+select @ReportString = 
+'LoginName            HostName             Database        SPID/BLCK ProgramName                    Command              LastBatch
+-------------------- -------------------- --------------- --------- ------------------------------ -------------------- -------------------
+'
+
+select @ReportString = @ReportString 
+                    + LoginName + ' ' + Hostname + ' ' +  DatabaseName + ' ' +spid + ' ' + blockid + ' ' + programname + ' ' + Command + ' ' + LastBatch 
+                    + char(13) + char(10)
+  from @Results
+
+
+
+
+
+
+
+---------------------------------------------------------------------
+-- Send alert if required                                          --
+---------------------------------------------------------------------
+
+IF (@ReportString <> '')
+BEGIN
+  print 'Blocked processes detected...'
+  select @Body = @Body + @ReportString
+
+  exec DBA.dbo.SendEmail
+    @EmailTo   = @EmailTo,
+    @EmailFrom = @EmailFrom,
+    @Subject   = @Subject,
+    @Body      = @Body
+
+  print 'Email sent.'
+
+END
+ELSE
+  print 'No failures detected...'
+GO
+
