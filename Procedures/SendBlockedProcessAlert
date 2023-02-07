@@ -42,7 +42,10 @@ declare @ReportString varchar(8000),
         @EmailFrom    varchar(100),
         @Subject      varchar(100),
         @Body         varchar(8000),
-		@BlocksFound  int
+		@BlocksFound  int,
+		@ProgramName  varchar(100),
+		@JobName      varchar(100),
+		@ID           int
 
 
 select  @ReportString = '',
@@ -57,12 +60,14 @@ select  @ReportString = '',
 
 
 declare @Results table 
-  ( LoginName    char(20),
+  ( 
+    ID           int identity primary key,
+    LoginName    char(20),
     HostName     char(20),
     DatabaseName char(15),
     spid         char(4),
     blockid      char(4),
-    ProgramName  char(40),
+    ProgramName  char(100),
     Command      char(10),
     LastBatch    char(19)
 )
@@ -92,6 +97,7 @@ declare @Results table
 -- Determine email address from server profile
 select top 1 @EmailFrom = email_address from msdb.dbo.sysmail_account
 
+
 -- Determine recipients
 select @EmailTo  = email_address + ';' from msdb.dbo.sysoperators
 
@@ -109,7 +115,8 @@ insert into @Results
          --'phys_io'      = str(physical_io,8,0),
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         --'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         'program_name' = left(program_name,100),
          'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
@@ -117,7 +124,7 @@ insert into @Results
          --'status'       = left(nt_username,20)
     from master.dbo.sysprocesses
     with (nolock)
-   where blocked > 0
+   --where blocked > 0
 UNION 
   select 'loginame'     = left(loginame, 20),
          'hostname'     = left(hostname,20),
@@ -127,7 +134,8 @@ UNION
          --'phys_io'      = str(physical_io,8,0),
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         --'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         'program_name' = left(program_name,100),
          'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
@@ -138,6 +146,46 @@ UNION
    where spid in (select blocked from master.dbo.sysprocesses where blocked > 0)
 
 select @BlocksFound = @@ROWCOUNT
+
+
+
+---------------------------------------------------------------------
+-- Convert ProgramName to JobStep                                  --
+---------------------------------------------------------------------
+
+
+
+declare ResultsCursor cursor for
+select ID, 
+       ProgramName
+  from @Results
+ order by ID 
+
+open ResultsCursor
+
+fetch next from ResultsCursor
+into @ID,
+     @ProgramName
+
+while (@@FETCH_STATUS =0)  -- rows found
+BEGIN
+  --print 'Processing: ' + @ProgramName
+  BEGIN TRY
+    select @JobName = dbo.fn_GetJobFromProgramName(@ProgramName)
+  END TRY
+  BEGIN CATCH
+    print 'ERROR - Could not extract JobID from ProgramName(' + @programName + ')'
+	
+	select @JobName = @ProgramName
+  END CATCH
+  --print 'JobName:    ' + @JobName
+  --print ' '
+  
+  fetch next from ResultsCursor
+  into @ID,
+       @ProgramName
+END
+
 
 
 ---------------------------------------------------------------------
@@ -153,7 +201,7 @@ LoginName            HostName             Database        SPID/BLCK ProgramName 
 '
 
 select @ReportString = @ReportString 
-                    + LoginName + ' ' + Hostname + ' ' +  DatabaseName + ' ' +spid + ' ' + blockid + ' ' + programname + ' ' + Command + ' ' + LastBatch 
+                    + LoginName + ' ' + Hostname + ' ' +  DatabaseName + ' ' +spid + ' ' + blockid + ' ' + left(programname,40) + ' ' + Command + ' ' + LastBatch 
                     + char(13) + char(10)
   from @Results
 
@@ -172,12 +220,12 @@ BEGIN
   print 'To:   ' + @EMailTo
 
    
-  exec DBA.dbo.SendEmail
-    @EmailTo   = @EmailTo,
-    @EmailFrom = @EmailFrom,
-    @Subject   = @Subject,
-    @Body      = @Body,
-    @HTML      = 'Y'
+  --exec DBA.dbo.SendEmail
+  --  @EmailTo   = @EmailTo,
+  --  @EmailFrom = @EmailFrom,
+  --  @Subject   = @Subject,
+  --  @Body      = @Body,
+  --  @HTML      = 'Y'
 
   print 'Email sent.'
 
