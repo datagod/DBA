@@ -1,0 +1,25 @@
+use dba
+go  
+alter function fn_GetJobFromProgramName
+(
+  @ProgramName varchar(100)
+)
+returns varchar(100)
+as
+BEGIN
+
+declare @jobid uniqueidentifier,
+        @JobName varchar(100)
+		
+
+if (@ProgramName like 'SQLAgent%')
+begin
+  select @jobid = cast(convert(binary(16),substring(@ProgramName,30,34),1) as uniqueidentifier)
+  select @JobName = name from  msdb.dbo.sysjobs where job_id = @jobid 
+end
+
+select @JobName = isnull(@JobName,@ProgramName)
+
+return @JobName
+END
+go
