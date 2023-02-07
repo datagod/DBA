@@ -96,9 +96,6 @@ select top 1 @EmailFrom = email_address from msdb.dbo.sysmail_account
 select @EmailTo  = email_address + ';' from msdb.dbo.sysoperators
 
 
-print 'From: ' + @EmailFrom
-print 'To:   ' + @EMailTo
-
 ---------------------------------------------------------------------
 -- Capture job information                                         --
 ---------------------------------------------------------------------
@@ -171,6 +168,8 @@ BEGIN
   print 'Blocked processes detected...'
   select @Body = @Body + @ReportString + '</PRE>'
 
+  print 'From: ' + @EmailFrom
+  print 'To:   ' + @EMailTo
 
    
   exec DBA.dbo.SendEmail
@@ -184,5 +183,7 @@ BEGIN
 
 END
 ELSE
-  print 'No failures detected...'
+  print 'No blocked processes detected...'
 GO
+
+exec SendBlockedProcessAlert
