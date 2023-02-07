@@ -18,6 +18,10 @@ as
 -- Description:  Email a short report of blocked processes.
 --               
 ---------------------------------------------------------------------------------------------------
+-- Date Revised: February 7, 2023
+-- Author:       William McEvoy
+-- Reason:       
+---------------------------------------------------------------------------------------------------
 -- Date Revised: 
 -- Author:       
 -- Reason:       
@@ -37,7 +41,8 @@ declare @ReportString varchar(8000),
         @EmailTo      varchar(500),
         @EmailFrom    varchar(100),
         @Subject      varchar(100),
-        @Body         varchar(8000)
+        @Body         varchar(8000),
+		@BlocksFound  int
 
 
 select  @ReportString = '',
@@ -46,7 +51,8 @@ select  @ReportString = '',
                         'Server: ' + upper(@@SERVERNAME) + '<BR>'+ '<BR>',
         @Subject      = 'Blocked Processes Detected: ' + upper(@@SERVERNAME),
         @EmailTo      = '',
-        @EmailFrom    = '' 
+        @EmailFrom    = '' ,
+		@BlocksFound  = 0
 
 
 
@@ -56,8 +62,8 @@ declare @Results table
     DatabaseName char(15),
     spid         char(4),
     blockid      char(4),
-    ProgramName  char(30),
-    Command      char(20),
+    ProgramName  char(40),
+    Command      char(10),
     LastBatch    char(19)
 )
 
@@ -106,8 +112,8 @@ insert into @Results
          --'phys_io'      = str(physical_io,8,0),
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = left(program_name,30),
-         'command'      = left(cmd,20),
+         'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
          'last_batch'   = convert(char(19),last_batch,120)
@@ -124,8 +130,8 @@ UNION
          --'phys_io'      = str(physical_io,8,0),
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = left(program_name,30),
-         'command'      = left(cmd,20),
+         'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
+         'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
          'last_batch'   = convert(char(19),last_batch,120)
@@ -134,8 +140,7 @@ UNION
     with (nolock)
    where spid in (select blocked from master.dbo.sysprocesses where blocked > 0)
 
-
---select * from @results
+select @BlocksFound = @@ROWCOUNT
 
 
 ---------------------------------------------------------------------
@@ -145,8 +150,9 @@ UNION
 
 
 select @ReportString =
-'LoginName            HostName             Database        SPID/BLCK ProgramName                    Command              LastBatch         
--------------------- -------------------- --------------- --------- ------------------------------ -------------------- -------------------
+'
+LoginName            HostName             Database        SPID/BLCK ProgramName                              Command    LastBatch         
+-------------------- -------------------- --------------- --------- ---------------------------------------- ---------- -------------------
 '
 
 select @ReportString = @ReportString 
@@ -160,7 +166,7 @@ select @ReportString = @ReportString
 -- Send alert if required                                          --
 ---------------------------------------------------------------------
 
-IF (@ReportString <> '')
+IF (@BLocksFound > 0)
 BEGIN
   print 'Blocked processes detected...'
   select @Body = @Body + @ReportString + '</PRE>'
@@ -180,5 +186,3 @@ END
 ELSE
   print 'No failures detected...'
 GO
-
-exec SendBlockedProcessAlert
