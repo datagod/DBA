@@ -124,7 +124,7 @@ insert into @Results
          --'status'       = left(nt_username,20)
     from master.dbo.sysprocesses
     with (nolock)
-   --where blocked > 0
+   where blocked > 0
 UNION 
   select 'loginame'     = left(loginame, 20),
          'hostname'     = left(hostname,20),
@@ -233,5 +233,3 @@ END
 ELSE
   print 'No blocked processes detected...'
 GO
-
-exec SendBlockedProcessAlert
