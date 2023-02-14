@@ -22,6 +22,10 @@ as
 -- Author:       William McEvoy
 -- Reason:       
 ---------------------------------------------------------------------------------------------------
+-- Date Revised: February 13, 2023
+-- Author:       William McEvoy
+-- Reason:       Edited the length of the programname column
+---------------------------------------------------------------------------------------------------
 -- Date Revised: 
 -- Author:       
 -- Reason:       
@@ -43,7 +47,7 @@ declare @ReportString varchar(8000),
         @Subject      varchar(100),
         @Body         varchar(8000),
 		@BlocksFound  int,
-		@ProgramName  varchar(100),
+		@ProgramName  varchar(150),
 		@JobName      varchar(100),
 		@ID           int
 
@@ -67,7 +71,7 @@ declare @Results table
     DatabaseName char(15),
     spid         char(4),
     blockid      char(4),
-    ProgramName  char(100),
+    ProgramName  char(150),
     Command      char(10),
     LastBatch    char(19)
 )
@@ -116,7 +120,7 @@ insert into @Results
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
          --'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
-         'program_name' = left(program_name,100),
+         'program_name' = left(program_name,150),
          'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
@@ -135,7 +139,7 @@ UNION
          --'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
          --'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
          --'program_name' = dbo.fn_GetJobFromProgramName(left(program_name,40)),
-         'program_name' = left(program_name,100),
+         'program_name' = left(program_name,150),
          'command'      = left(cmd,10),
          --'lastwaittype' = left(lastwaittype,25),
          --'login_time'   = convert(char(19),login_time,120),
