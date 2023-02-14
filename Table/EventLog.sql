@@ -9,6 +9,7 @@ create table EventLog
 (
   EventLogID   int identity,
   EventTime    datetime,
+  Severity     tinyint NULL,
   DatabaseName varchar(50) NULL,
   HostName     varchar(30) NULL,
   UserName     varchar(30) NULL,
@@ -20,7 +21,7 @@ go
 IF (object_id('EventLog') IS NOT NULL)
   print 'Table created.'
 ELSE
-  print 'Table NOT created.'
+  print 'Table NOT created.' 
 
 
 ALTER TABLE dbo.EventLog 
