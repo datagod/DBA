@@ -15,7 +15,7 @@ declare @jobid uniqueidentifier,
 if (@ProgramName like 'SQLAgent - TSQL JobStep%')
 begin
   select @jobid = cast(convert(binary(16),substring(@ProgramName,30,34),1) as uniqueidentifier)
-  select @JobName = name from  msdb.dbo.sysjobs where job_id = @jobid 
+  select @JobName = 'Job: ' + name from  msdb.dbo.sysjobs where job_id = @jobid 
 end
 
 
