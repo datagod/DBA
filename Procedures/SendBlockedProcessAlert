@@ -45,10 +45,10 @@ declare @ReportString varchar(8000),
         @EmailFrom    varchar(100),
         @Subject      varchar(100),
         @Body         varchar(8000),
-		@BlocksFound  int,
-		@ProgramName  varchar(150),
-		@JobName      varchar(100),
-		@ID           int
+        @BlocksFound  int,
+	      @ProgramName  varchar(150),
+	      @JobName      varchar(100),
+	      @ID           int
 
 
 select  @ReportString = '',
@@ -196,7 +196,6 @@ END
 ---------------------------------------------------------------------
 
 
-
 select @ReportString =
 '
 LoginName            HostName             Database        SPID/BLCK ProgramName                              Command    LastBatch         
@@ -223,12 +222,12 @@ BEGIN
   print 'To:   ' + @EMailTo
 
    
-  --exec DBA.dbo.SendEmail
-  --  @EmailTo   = @EmailTo,
-  --  @EmailFrom = @EmailFrom,
-  --  @Subject   = @Subject,
-  --  @Body      = @Body,
-  --  @HTML      = 'Y'
+  exec DBA.dbo.SendEmail
+    @EmailTo   = @EmailTo,
+    @EmailFrom = @EmailFrom,
+    @Subject   = @Subject,
+    @Body      = @Body,
+    @HTML      = 'Y'
 
   print 'Email sent.'
 
