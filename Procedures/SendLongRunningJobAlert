@@ -1,0 +1,226 @@
+use DBA
+IF (object_id('SendLongRunningJobAlert') IS NOT NULL)
+BEGIN
+  PRINT 'Dropping: SendLongRunningJobAlert'
+  DROP PROCEDURE SendLongRunningJobAlert     
+END
+GO
+PRINT 'Creating: SendLongRunningJobAlert'
+GO
+create procedure SendLongRunningJobAlert
+(
+  @HoursToCheck int
+)
+as
+---------------------------------------------------------------------------------------------------
+-- Date Created: March 5, 2023
+-- Author:       William McEvoy
+--               
+-- Description:  Email a short report of blocked processes.
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+---------------------------------------------------------------------
+-- Validate input parameters                                       --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+declare @ReportString varchar(8000),
+        @EmailTo      varchar(500),
+        @EmailFrom    varchar(100),
+        @Subject      varchar(100),
+        @Body         varchar(8000),
+        @JobsFound  int,
+	      @ProgramName  varchar(150),
+        @StartDate    datetime,
+	      @JobName      varchar(100),
+        @Duration     varchar(8),
+        @Alert        varchar(100),
+	      @ID           int
+
+
+select  @ReportString = '',
+        @Body         = '<PRE>' + 
+                        'Date:   ' + convert(varchar(19),getdate(),120) + '<BR>' +
+                        'Server: ' + upper(@@SERVERNAME) + '<BR>'+ '<BR>',
+        @Subject      = 'Long Running Jobs Detected: ' + upper(@@SERVERNAME),
+        @EmailTo      = '',
+        @EmailFrom    = '' ,
+        @JobsFound  = 0
+
+
+
+declare @Results table 
+  ( 
+    ID           int identity primary key,
+    StartDate    char(19),
+    JobName      char(50),
+    Duration     char(10),
+    Alert        char(100)
+)
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+-- Determine To/From addresses                                     --
+--                                                                 --
+-- Capture job information                                         --
+--                                                                 --
+-- Parse job information result set into a single string           --
+--                                                                 --
+-- Send alert if required                                          --
+--                                                                 --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- Determine To/From addresses                                     --
+---------------------------------------------------------------------
+
+
+-- Determine email address from server profile
+select top 1 @EmailFrom = email_address from msdb.dbo.sysmail_account
+
+
+-- Determine recipients
+select @EmailTo  = email_address + ';' from msdb.dbo.sysoperators
+
+
+---------------------------------------------------------------------
+-- Capture job information                                         --
+---------------------------------------------------------------------
+
+
+;with JobTimings as
+(
+SELECT convert(varchar(50),name) as 'JobName',
+       start_execution_date as 'StartDate',
+       DATEDIFF(MINUTE,aj.start_execution_date,GetDate()) AS 'DurationInMinutes'
+  FROM msdb..sysjobactivity aj
+  JOIN msdb..sysjobs        sj on sj.job_id = aj.job_id
+ WHERE aj.stop_execution_date IS NULL -- job hasn't stopped running
+   AND aj.start_execution_date IS NOT NULL -- job is currently running
+   and not exists( -- make sure this is the most recent run
+       select 1
+         from msdb..sysjobactivity new
+        where new.job_id = aj.job_id
+          and new.start_execution_date > aj.start_execution_date
+      )
+)
+insert into @Results
+select convert(varchar(19),StartDate,120),
+       JobName,
+       'Duration' = dbo.fn_SecondsToTime(DurationinMinutes * 60),
+       'Alert'    = CASE when DurationInMinutes >= (@HoursToCheck * 60) then 'WARNING!  Long running job detected.' else '' end
+  from JobTimings
+ where DurationInMinutes >= (@HoursToCheck * 60)
+select @JobsFound = @@ROWCOUNT
+
+
+
+---------------------------------------------------------------------
+-- Convert ProgramName to JobStep                                  --
+---------------------------------------------------------------------
+
+declare ResultsCursor cursor for
+select ID, 
+       StartDate,
+       JobName,
+       Duration,
+       Alert
+  from @Results
+ order by ID 
+
+open ResultsCursor
+
+fetch next from ResultsCursor
+into @ID,
+     @StartDate,
+     @JobName,
+     @Duration,
+     @Alert
+
+while (@@FETCH_STATUS =0)  -- rows found
+BEGIN
+  --print 'Processing: ' + @ProgramName
+  BEGIN TRY
+    select @JobName = dbo.fn_GetJobFromProgramName(@ProgramName)
+  END TRY
+  BEGIN CATCH
+    print 'ERROR - Could not extract JobID from ProgramName(' + @programName + ')'
+	
+	select @JobName = @ProgramName
+  END CATCH
+  --print 'JobName:    ' + @JobName
+  --print ' '
+  
+  fetch next from ResultsCursor
+  into @ID,
+       @StartDate,
+       @JobName,
+       @Duration,
+       @Alert
+END
+
+
+
+---------------------------------------------------------------------
+-- Parse job information result set into a single string           --
+---------------------------------------------------------------------
+
+
+select @ReportString =
+'
+StartDate           JobName                                            Duration   Alert
+------------------- -------------------------------------------------- ---------- ------------------------------------
+2023-03-06 00:15:00 DCMS Sync ~ #04 (Truck/Load Sheets)                00:25:00 
+'
+
+select @ReportString = @ReportString 
+                    + StartDate + ' ' + JobName + ' ' +  Duration + ' ' + Alert 
+                    + char(13) + char(10)
+  from @Results
+
+
+
+---------------------------------------------------------------------
+-- Send alert if required                                          --
+---------------------------------------------------------------------
+
+select @ReportString
+
+IF (@JobsFound > 0)
+BEGIN
+  print 'Blocked processes detected...'
+  select @Body = @Body + @ReportString + '</PRE>'
+
+  print 'From: ' + @EmailFrom
+  print 'To:   ' + @EMailTo
+
+   
+  exec DBA.dbo.SendEmail
+    @EmailTo   = @EmailTo,
+    @EmailFrom = @EmailFrom,
+    @Subject   = @Subject,
+    @Body      = @Body,
+    @HTML      = 'Y'
+
+  print 'Email sent.'
+
+END
+ELSE
+  print 'No blocked processes detected...'
+GO
+
+
