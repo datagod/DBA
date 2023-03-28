@@ -10,6 +10,7 @@ GO
 CREATE PROCEDURE LogEvent
 (
   @Process       varchar(100)  = '',
+  @Parameters    varchar(100)  = '',
   @DatabaseName  varchar(50)   = '',
   @Severity      tinyint       = 0,
   @Description1  varchar(7000) = '',
@@ -155,8 +156,8 @@ BEGIN
 END
 
 -- insert record into table
-insert EventLog (EventTime,  DatabaseName,  Severity,  HostName,  UserName,  Process,  [Description], Instructions)
-values          (@EventTime, @DatabaseName, @Severity, @HostName, @UserName, @Process, @Description,  @Instructions)
+insert EventLog (EventTime,  DatabaseName,  Severity,  HostName,  UserName,  Process,  [Parameters], [Description], Instructions)
+values          (@EventTime, @DatabaseName, @Severity, @HostName, @UserName, @Process, @Parameters,  @Description,  @Instructions)
 
 select @error = @@ERROR
 
