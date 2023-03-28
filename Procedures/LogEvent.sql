@@ -11,6 +11,7 @@ CREATE PROCEDURE LogEvent
 (
   @Process       varchar(100)  = '',
   @DatabaseName  varchar(50)   = '',
+  @Severity      tinyint       = 0,
   @Description1  varchar(7000) = '',
   @Description2  varchar(7000) = '',
   @Description3  varchar(7000) = '',
@@ -21,6 +22,7 @@ CREATE PROCEDURE LogEvent
   @Description8  varchar(7000) = '',
   @Description9  varchar(7000) = '',
   @Description10 varchar(7000) = '',
+  @Instructions  varchar(7000) = '',
   @Print         char(1)       = 'N' -- (Y/N) set to Y to force printing of message, regardless of connecting client
 )
 as
@@ -52,7 +54,12 @@ as
 -- Author:       William McEvoy
 -- Reason:       Changed Process and DatabaseName to be optional parameters
 ---------------------------------------------------------------------------------------------------
--- Version:
+-- Version:      1.4
+-- Date Revised: March 27, 2023
+-- Author:       William McEvoy
+-- Reason:       Added Severity and Instructions optional columns
+---------------------------------------------------------------------------------------------------
+-- Version:      
 -- Date Revised: 
 -- Author:       
 -- Reason:       
@@ -148,8 +155,8 @@ BEGIN
 END
 
 -- insert record into table
-insert EventLog (EventTime,  DatabaseName,  HostName,  UserName,  Process,  Description)
-values          (@EventTime, @DatabaseName, @HostName, @UserName, @Process, @Description)
+insert EventLog (EventTime,  DatabaseName,  Severity,  HostName,  UserName,  Process,  [Description], Instructions)
+values          (@EventTime, @DatabaseName, @Severity, @HostName, @UserName, @Process, @Description,  @Instructions)
 
 select @error = @@ERROR
 
