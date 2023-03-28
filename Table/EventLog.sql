@@ -14,7 +14,8 @@ create table EventLog
   HostName     varchar(30) NULL,
   UserName     varchar(30) NULL,
   Process      varchar(50) NULL,
-  Description  varchar(7000) NULL
+  Description  varchar(7000) NULL,
+  Instructions varchar(7000) NULL
 )
 with (data_compression = page)
 go
