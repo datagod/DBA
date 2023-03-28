@@ -1,23 +1,25 @@
 IF (object_id('EventLog') IS NOT NULL)
 BEGIN
   print 'Dropping Table: EventLog'
-  drop table EventLog
+  drop table EventLog2
 END
 print 'Creating Table: EventLog'
 
-create table EventLog
+create table EventLog2
 (
   EventLogID   int identity,
   EventTime    datetime,
-  Severity     tinyint NULL,
+  Severity     tinyint NULL default 0,
   DatabaseName varchar(50) NULL,
   HostName     varchar(30) NULL,
   UserName     varchar(30) NULL,
   Process      varchar(50) NULL,
+  Parameters   varchar(100) NULL,
   Description  varchar(7000) NULL,
   Instructions varchar(7000) NULL
+
 )
-with (data_compression = page)
+--with (data_compression = page)
 go
 IF (object_id('EventLog') IS NOT NULL)
   print 'Table created.'
