@@ -10,9 +10,7 @@ GO
 CREATE PROCEDURE LogEvent
 (
   @Process       varchar(100)  = '',
-  @Parameters    varchar(100)  = '',
   @DatabaseName  varchar(50)   = '',
-  @Severity      tinyint       = 0,
   @Description1  varchar(7000) = '',
   @Description2  varchar(7000) = '',
   @Description3  varchar(7000) = '',
@@ -23,6 +21,8 @@ CREATE PROCEDURE LogEvent
   @Description8  varchar(7000) = '',
   @Description9  varchar(7000) = '',
   @Description10 varchar(7000) = '',
+  @Parameters    varchar(100)  = '',
+  @Severity      tinyint       = 0,
   @Instructions  varchar(7000) = '',
   @Print         char(1)       = 'N' -- (Y/N) set to Y to force printing of message, regardless of connecting client
 )
