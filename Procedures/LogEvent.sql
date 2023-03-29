@@ -10,7 +10,7 @@ GO
 CREATE PROCEDURE LogEvent
 (
   @Process       varchar(100)  = '',
-  @DatabaseName  varchar(50)   = '',
+  @DatabaseName  varchar(100)   = '',
   @Description1  varchar(7000) = '',
   @Description2  varchar(7000) = '',
   @Description3  varchar(7000) = '',
@@ -156,8 +156,8 @@ BEGIN
 END
 
 -- insert record into table
-insert EventLog (EventTime,  DatabaseName,  Severity,  HostName,  UserName,  Process,  [Parameters], [Description], Instructions)
-values          (@EventTime, @DatabaseName, @Severity, @HostName, @UserName, @Process, @Parameters,  @Description,  @Instructions)
+insert EventLog (EventTime,  DatabaseName,           Severity,  HostName,  UserName,  Process,           [Parameters], [Description], Instructions)
+values          (@EventTime, left(@DatabaseName,50), @Severity, @HostName, @UserName, left(@Process,50), @Parameters,  @Description,  @Instructions)
 
 select @error = @@ERROR
 
@@ -174,3 +174,6 @@ IF (object_id('LogEvent') IS NOT NULL)
 ELSE
   print 'Procedure NOT created'
 GO
+
+
+
