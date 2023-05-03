@@ -1,0 +1,44 @@
+-- Created by ChatGPT 4.0
+
+use DBA
+go
+create or alter PROCEDURE [dbo].[SplitEmailAddresses]
+    @EmailAddresses NVARCHAR(MAX)
+AS
+BEGIN
+    -- Create a temporary table to store the email addresses
+    CREATE TABLE #EmailTable
+    (
+        EmailAddress NVARCHAR(255)
+    );
+
+    -- Declare variables
+    DECLARE @Email NVARCHAR(255), @Pos INT;
+
+    -- Add a trailing semi-colon to the input string if it's not present
+    IF RIGHT(@EmailAddresses, 1) <> ';'
+    BEGIN
+        SET @EmailAddresses = @EmailAddresses + ';';
+    END;
+
+    -- Loop through the input string and extract the email addresses
+    WHILE CHARINDEX(';', @EmailAddresses) > 0
+    BEGIN
+        SET @Pos = CHARINDEX(';', @EmailAddresses);
+
+        SET @Email = LEFT(@EmailAddresses, @Pos - 1);
+
+        INSERT INTO #EmailTable (EmailAddress)
+        VALUES (@Email);
+
+        SET @EmailAddresses = STUFF(@EmailAddresses, 1, @Pos, '');
+    END;
+
+    -- Output the email addresses
+    SELECT EmailAddress
+    FROM #EmailTable
+    order by 1
+
+    -- Drop the temporary table
+    DROP TABLE #EmailTable;
+END;
