@@ -1,0 +1,82 @@
+--Created by ChatGPT 4.0
+
+
+alter PROCEDURE [dbo].[SplitAndSortEmailAddresses]
+    @EmailAddresses NVARCHAR(MAX),
+    @SortedEmailAddresses NVARCHAR(MAX) OUTPUT
+AS
+BEGIN
+    -- Create a temporary table to store the email addresses
+    CREATE TABLE #EmailTable
+    (
+        EmailAddress NVARCHAR(255)
+    );
+
+    -- Declare variables
+    DECLARE @Email NVARCHAR(255), @Pos INT, @ValidEmail NVARCHAR(255);
+
+    -- Add a trailing semi-colon to the input string if it's not present
+    IF RIGHT(@EmailAddresses, 1) <> ';'
+    BEGIN
+        SET @EmailAddresses = @EmailAddresses + ';';
+    END;
+
+    -- Loop through the input string and extract the email addresses
+    WHILE CHARINDEX(';', @EmailAddresses) > 0
+    BEGIN
+        SET @Pos = CHARINDEX(';', @EmailAddresses);
+
+        SET @Email = LEFT(@EmailAddresses, @Pos - 1);
+
+        INSERT INTO #EmailTable (EmailAddress)
+        VALUES (@Email);
+
+        SET @EmailAddresses = STUFF(@EmailAddresses, 1, @Pos, '');
+    END;
+
+    -- Output the sorted email addresses
+    SELECT EmailAddress
+    INTO #SortedEmailTable
+    FROM #EmailTable
+    ORDER BY EmailAddress;
+
+    -- Initialize the output variable
+    SET @SortedEmailAddresses = '';
+
+    -- Loop through the sorted email addresses, remove special characters and reassemble
+    DECLARE cur CURSOR FOR
+    SELECT EmailAddress FROM #SortedEmailTable
+    order by EmailAddress;
+
+    OPEN cur;
+
+    FETCH NEXT FROM cur INTO @Email;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        -- Remove invalid characters from the email address
+        SET @ValidEmail = (SELECT STUFF((SELECT '' + value
+                                         FROM (SELECT SUBSTRING(@Email, v.number, 1) value
+                                               FROM master..spt_values v
+                                               WHERE v.type = 'P'
+                                                 AND v.number BETWEEN 1 AND LEN(@Email)
+                                                 AND (SUBSTRING(@Email, v.number, 1) LIKE '%[A-Za-z0-9._%+-]%' OR SUBSTRING(@Email, v.number, 1) = '@')) AS email_chars
+                                         FOR XML PATH('')), 1, 0, ''));
+
+        -- Print the valid email address
+        PRINT @ValidEmail;
+
+        -- Append the valid email address to the output variable
+        SET @SortedEmailAddresses = @SortedEmailAddresses + @ValidEmail + ';';
+
+        FETCH NEXT FROM cur INTO @Email;
+    END;
+
+    CLOSE cur;
+
+    DEALLOCATE cur;
+
+    -- Drop the temporary tables
+    DROP TABLE #EmailTable;
+    DROP TABLE #SortedEmailTable;
+END;
