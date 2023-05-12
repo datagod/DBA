@@ -1,11 +1,17 @@
 --Created by ChatGPT 4.0
-
-
 alter PROCEDURE [dbo].[SplitAndSortEmailAddresses]
     @EmailAddresses NVARCHAR(MAX),
     @SortedEmailAddresses NVARCHAR(MAX) OUTPUT
 AS
 BEGIN
+  set nocount on
+
+   declare @len int,
+           @rowcount int
+
+   select @len = len(@EmailAddresses)
+   print 'Email List length: ' + convert(varchar(10),@len)
+
     -- Create a temporary table to store the email addresses
     CREATE TABLE #EmailTable
     (
@@ -34,11 +40,16 @@ BEGIN
         SET @EmailAddresses = STUFF(@EmailAddresses, 1, @Pos, '');
     END;
 
+        
+    
     -- Output the sorted email addresses
     SELECT EmailAddress
     INTO #SortedEmailTable
     FROM #EmailTable
     ORDER BY EmailAddress;
+
+    select @rowcount = @@ROWCOUNT 
+    print 'Email count: ' + convert(varchar(10),@rowcount)
 
     -- Initialize the output variable
     SET @SortedEmailAddresses = '';
@@ -80,3 +91,4 @@ BEGIN
     DROP TABLE #EmailTable;
     DROP TABLE #SortedEmailTable;
 END;
+GO
