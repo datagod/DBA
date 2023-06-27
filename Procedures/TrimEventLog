@@ -1,0 +1,188 @@
+use DBA
+go
+IF (object_id('TrimEventLog') IS NOT NULL)
+BEGIN
+  print 'Dropping procedure: TrimEventLog'
+  drop procedure TrimEventLog
+END
+print 'Creating procedure: TrimEventLog'
+GO
+CREATE PROCEDURE TrimEventLog
+(
+  @DaysToKeep int = 30,
+  @ProcessToTrim varchar(255) = '%'
+)
+as
+---------------------------------------------------------------------------------------------------
+-- Date Created: January 1, 2011    * Happy New Year!! *
+-- Author:       William McEvoy
+--               
+-- Description:  This procedure is used to trim records out of the EventLog table.
+--
+-- Usage:        exec TrimEventLog NameOfProcessRecordsToDelete, DeleteRecordsOlderThanXDays
+--
+--               To delete all reocrds logged from the CopyBackupFileProcess older than 30 days
+--               issue the following command:
+--               exec CopyBackpFile','30' 
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+-- Standard Variables
+declare @error           int,
+        @rowcount        int,
+        @status          int,
+        @output          varchar(7000),
+        @count           int,
+        @TableAction     varchar(20),
+        @TableName       varchar(100),
+        @AdditionalInfo  varchar(500),
+        @ProcedureName   varchar(255),
+        @Database        varchar(128),
+        @Process         varchar(128),
+        @ReturnCode      int,
+        @SQL             varchar(8000)
+
+select  @error           = 0,
+        @rowcount        = 0,
+        @status          = 0,
+        @output          = '',
+        @count           = 0,
+        @ProcedureName   = '',
+        @AdditionalInfo  = '',
+        @Database        = db_name(),
+        @Process         = Object_Name(@@ProcID),
+        @ReturnCode      = 0,
+        @SQL             = ''
+
+
+---------------------------------------------------------------------
+-- Validate Input Parameters                                       --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+---------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, ' '
+exec LogEvent @Process, @Database, '----------------'
+exec LogEvent @Process, @Database, '- TrimEventLog -'
+exec LogEvent @Process, @Database, '----------------'
+exec LogEvent @Process, @Database, 'Started:    <datetime>'
+exec LogEvent @Process, @Database, 'Process:    ', @ProcessToTrim
+exec LogEvent @Process, @Database, 'DaysToKeep: ', @DaysToKeep
+
+
+
+----------------------------------------------------------------------
+-- Delete records from EventLog older than specified number of days --
+----------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, 'Trimming EventLog'
+
+
+delete 
+From EventLog
+where Process like @ProcessToTrim
+  and EventTime <= getdate() - @DaysToKeep
+
+select @error    = @@ERROR,
+       @rowcount = @@ROWCOUNT
+
+-- Error Handling
+IF (@error <> 0)
+BEGIN
+  select @TableAction    = 'delete',
+         @TableName      = @Database + '.dbo.EventLog',
+         @AdditionalInfo = '(trimming the EventLog)'
+  GOTO TableAccessError
+END
+
+exec LogEvent @Process, @Database, 'Records deleted: ', @rowcount
+exec LogEvent @Process, @Database, '--End--'
+
+
+select @ReturnCode = 1  -- Indicates success
+goto THE_EXIT
+
+---------------------------------------------------------------------
+-- E R R O R   P R O C E S S I N G                                 --
+---------------------------------------------------------------------
+
+TableAccessError:
+select @output = upper(@TableAction) + 
+       ' ERROR - An error occurred while ' + 
+       case (@TableAction)
+         when 'update' then 'updating'
+         when 'delete' then 'deleting'
+         else @TableAction + 'ing'
+       end + 
+       ' records ' + 
+       case(@TableAction) 
+         when 'select' then 'from' 
+         when 'update' then 'in' 
+         when 'insert' then 'into'
+         else 'from'   
+         end  + 
+         ' the ' + @TableName + ' table.'
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+
+
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+select @ReturnCode = -1
+GOTO THE_EXIT
+
+ProcessingError:
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+select @ReturnCode = -1
+GOTO THE_EXIT
+
+InputError:
+-- Handles generic input errors, no need to write to the log
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,10,1)
+select @ReturnCode = -1
+GOTO THE_EXIT
+
+
+ProcedureError:
+select @output = '(' + @Process + ') PROCEDURE ERROR - The procedure ('+ @ProcedureName + ') returned a sub-zero status code, indicating an error has occurred.'
+select @output = @output + '  @status: '  + convert(varchar(8),  @status) 
+select @output = @output + @AdditionalInfo
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+select @ReturnCode = -1
+GOTO THE_EXIT
+
+
+THE_EXIT:
+return @ReturnCode
+GO
+
+IF (object_id('TrimEventLog') IS NOT NULL)
+  print 'Procedure created'
+ELSE
+  print 'Procedure NOT created'
+GO
+
+
