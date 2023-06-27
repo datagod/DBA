@@ -1,11 +1,11 @@
-alter procedure [dbo].[EL]
+ALTER procedure [dbo].[EL]
 (
   @Days        decimal(5,2) = 0.01,
   @Process     varchar(100) = '%',
-  @Description varchar(100) = '%'
+  @Description varchar(100) = '%',
+  @Severity    int = NULL
 )
 as
-
 
 select e1.EventLogID, 
        e1.EventTime, 
@@ -20,5 +20,11 @@ select e1.EventLogID,
    and e1.Process like @process
    --and e2.Process like @process
    and e1.Description like @description 
+   and (e1.Severity = @Severity or @Severity IS NULL)
  order by e1.EventLogID asc
 go
+
+
+
+
+
