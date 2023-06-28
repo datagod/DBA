@@ -12,7 +12,11 @@ create procedure SendEmailAlert
   @ToEmailID   int = 2,      -- default is DBA
   @FromEmailID int = 1,      -- default is system
   @Subject     varchar(255),
-  @Body        varchar(7000)
+  @Body        varchar(7000),
+  @ToEmailDescription varchar(255)   = 'DBA',
+  @FromEmailDescription varchar(255) = 'system'
+
+
 )
 as
  
@@ -81,13 +85,56 @@ select
 ---------------------------------------------------------------------
 
 
+-- Check based on EmailList Description
+-- get TO email address
+select @To = DistributionList
+  from EmailList
+where [Description] = @ToEmailDescription
+
+--exec LogEvent @Process, @Database, 'Description @To: ',@To
+
+-- Get FROM (system) email address
+select @From = DistributionList
+  from EmailList
+where [description] = @FromEmailDescription
+
+--exec LogEvent @Process, @Database, 'Description @From: ',@From
+
+
+
+--Check based on EmailList EmailID
+IF (@To = '' or @To is null)
+BEGIN
+  exec LogEvent @Process, @Database, 'To Distribution list not found.  Use EmailID instead'
+
+  select @To = DistributionList
+    from EmailList
+  where EmailID = @ToEmailID
+END
+
+IF (@From = '' or @From is null)
+BEGIN
+  exec LogEvent @Process, @Database, 'From Distribution list not found.  Use EmailID instead'
+
+  select @From = DistributionList
+    from EmailList
+  where EmailID = @FromEmailID
+END
+
+
+-- Fill in defaults if still no value found
+IF (@From = '' or @From is null)
+  select @From = 'noreply@xxxx.com'
+
+IF (@To = '' or @To is null)
+  select @To = 'william.mcevoy@xxxx.com'
+
+
+
 ---------------------------------------------------------------------
 -- M A I N   P R O C E S S I N G                                   --
 ---------------------------------------------------------------------
 --                                                                 --
--- Process the Queue                                               --
---                                                                 --
--- Cleanup the Queue                                               --
 --                                                                 --
 ---------------------------------------------------------------------
 
@@ -95,33 +142,20 @@ exec LogEvent @Process, @Database, ' '
 exec LogEvent @Process, @Database, '-----------------------'
 exec LogEvent @Process, @Database, '- SendEMailAlert      -'
 exec LogEvent @Process, @Database, '-----------------------'
-exec LogEvent @Process, @Database, 'Started:     <datetime>'
-exec LogEvent @Process, @Database, 'ToEmailID:   ',@ToEmailID
-exec LogEvent @Process, @Database, 'FromEmailID: ',@FromEmailID
-exec LogEvent @Process, @Database, 'Subject:     ',@Subject
+exec LogEvent @Process, @Database, 'Started:       <datetime>'
+exec LogEvent @Process, @Database, 'ToEmailID:     ',@ToEmailID
+exec LogEvent @Process, @Database, 'FromEmailID:   ',@FromEmailID
+exec LogEvent @Process, @Database, 'ToEmailDesc:   ',@ToEmailID
+exec LogEvent @Process, @Database, 'FromEmailDesc: ',@FromEmailDescription
+exec LogEvent @Process, @Database, 'ToEmailDesc:   ',@ToEmailDescription
+exec LogEvent @Process, @Database, 'Subject:       ',@Subject
 exec LogEvent @Process, @Database, ''
+exec LogEvent @Process, @Database, 'Calculated From: ',@From
+exec LogEvent @Process, @Database, 'Calculated To:   ',@To
 
 
 
 
--- get TO email address
-select @To = DistributionList
-  from EmailList
-where EmailID = @ToEmailID
-
-
--- Get FROM (system) email address
-select @From = DistributionList
-  from EmailList
-where EmailID = @FromEmailID
-
-
-
-IF (@From = '' or @From is null)
-  select @From = 'noreply@pxxx.com'
-
-IF (@To = '' or @To is null)
-  select @From = 'TheDBA@pxxx.com'
 
 
 -- Populate EmailQueue
@@ -201,4 +235,3 @@ IF (object_id('SendEmailAlert') IS NOT NULL)
 ELSE
   PRINT 'Procedure NOT created.'
 GO
-
