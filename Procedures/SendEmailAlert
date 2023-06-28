@@ -1,0 +1,204 @@
+use DBA
+IF (object_id('SendEmailAlert') IS NOT NULL)
+BEGIN
+  PRINT 'Dropping: SendEmailAlert'
+  DROP PROCEDURE SendEmailAlert     
+END
+GO
+PRINT 'Creating: SendEmailAlert'
+GO
+create procedure SendEmailAlert
+(
+  @ToEmailID   int = 2,      -- default is DBA
+  @FromEmailID int = 1,      -- default is system
+  @Subject     varchar(255),
+  @Body        varchar(7000)
+)
+as
+ 
+---------------------------------------------------------------------------------------------------
+-- Date Created: June 28, 2023
+-- Author:       William McEvoy
+--               
+-- Description:  This procedure is used to send an email alert.  A record is inserted into the 
+--               EmailQueue table which is then later processed asynchronously.  By separating the
+--               generation of the email with sending, we prevent processes from beign delayed by
+--               communication with the mail server.
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+-- Standard Variables
+declare @error           int,
+        @rowcount        int,
+        @status          int,
+        @output          varchar(7000),
+        @TableAction     varchar(20),
+        @TableName       varchar(100),
+        @AdditionalInfo  varchar(500),
+        @ProcedureName   varchar(255),
+        @Database        varchar(128),
+        @Process         varchar(128)
+
+select  @error           = 0,
+        @rowcount        = 0,
+        @status          = 0,
+        @output          = '',
+        @ProcedureName   = '',
+        @AdditionalInfo  = '',
+        @Database        = db_name(),
+        @Process         = Object_Name(@@ProcID)
+
+
+-- Custom Variables
+declare 
+        @To              varchar(255),
+        @From            varchar(255),
+        @ErrorMessage    varchar(255),
+        @Importance      varchar(10),
+        @HTML            char(1)
+
+
+select  
+        @To              = '',
+        @From            = '',
+        @ErrorMessage    = '',
+        @Importance      = 'HIGH',
+        @HTML            = 'N'
+
+
+---------------------------------------------------------------------
+-- Validate input parameters                                       --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+-- Process the Queue                                               --
+--                                                                 --
+-- Cleanup the Queue                                               --
+--                                                                 --
+---------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, ' '
+exec LogEvent @Process, @Database, '-----------------------'
+exec LogEvent @Process, @Database, '- SendEMailAlert      -'
+exec LogEvent @Process, @Database, '-----------------------'
+exec LogEvent @Process, @Database, 'Started:     <datetime>'
+exec LogEvent @Process, @Database, 'ToEmailID:   ',@ToEmailID
+exec LogEvent @Process, @Database, 'FromEmailID: ',@FromEmailID
+exec LogEvent @Process, @Database, 'Subject:     ',@Subject
+exec LogEvent @Process, @Database, ''
+
+
+
+
+-- get TO email address
+select @To = DistributionList
+  from EmailList
+where EmailID = @ToEmailID
+
+
+-- Get FROM (system) email address
+select @From = DistributionList
+  from EmailList
+where EmailID = @FromEmailID
+
+
+
+IF (@From = '' or @From is null)
+  select @From = 'noreply@pxxx.com'
+
+IF (@To = '' or @To is null)
+  select @From = 'TheDBA@pxxx.com'
+
+
+-- Populate EmailQueue
+exec LogEvent @Process, @Database, 'Inserting record into EmailQueue TO(',@To,')  FROM(',@From,')  SUBJECT(',@Subject,')'
+
+insert into EmailQueue ([to],[from],[subject],[body],[importance])
+  select                @To, @From, @Subject, @Body, 'HIGH'
+      
+
+select @error    = @@ERROR,
+       @rowcount = @@ROWCOUNT
+
+IF (@error <> 0) or (@rowcount <> 1)
+BEGIN
+  select @TableAction    = 'insert',
+         @TableName      = 'DBA.dbo.EmailQueue',
+         @AdditionalInfo = '@From: ' + @From + ' @To: ' + @To + ' Subject: ' + @Subject
+  GOTO TableAccessError
+END
+
+exec LogEvent @Process, @Database, '--END--'
+
+return 0
+
+---------------------------------------------------------------------
+-- E R R O R   P R O C E S S I N G                                 --
+---------------------------------------------------------------------
+
+TableAccessError:
+select @output = upper(@TableAction) + 
+       ' ERROR - An error occurred while ' + 
+       case (@TableAction)
+         when 'update' then 'updating'
+         when 'delete' then 'deleting'
+         else @TableAction + 'ing'
+       end + 
+       ' records ' + 
+       case(@TableAction) 
+         when 'select' then 'from' 
+         when 'update' then 'in' 
+         when 'insert' then 'into'
+         else 'from'   
+         end  + 
+         ' the ' + @TableName + ' table.'
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+ProcessingError:
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+ProcedureError:
+select @output = '(' + @Process + ') PROCEDURE ERROR - A sub-zero status code was returned from procedure ('+ @ProcedureName + ').'
+select @output = @output + '  @status: '  + convert(varchar(8),  @status) 
+select @output = @output + @AdditionalInfo
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+
+THE_EXIT:
+exec LogEvent @Process, @Database, '--END WITH ERROR--'
+return -1
+GO
+
+
+IF (object_id('SendEmailAlert') IS NOT NULL)
+  PRINT 'Procedure created.'
+ELSE
+  PRINT 'Procedure NOT created.'
+GO
+
