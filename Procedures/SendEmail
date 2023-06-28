@@ -1,5 +1,5 @@
 USE [DBA]
-
+GO
 ALTER procedure [dbo].[SendEmail]
 (
   @EmailTo    varchar(500),
@@ -22,12 +22,12 @@ as
 ---------------------------------------------------------------------------------------------------
 -- Date Revised: July 17, 2013
 -- Author:       William McEvoy
--- Reason:       We now want to select the first profile, not just one with profile_id = 1
+-- Reason:       We now want to select the first provile, not just one with profile_id = 1
 --               in case that one was deleted.
 ---------------------------------------------------------------------------------------------------
--- Date Revised: February 6, 2023
+-- Date Revised: June 28, 2023
 -- Author:       William McEvoy
--- Reason:       Added ability to send HTML formatted emails
+-- Reason:       We now raise an error if To/From/Subject are empty
 ---------------------------------------------------------------------------------------------------
 -- Date Revised: 
 -- Author:       
@@ -48,6 +48,11 @@ IF (@EmailFrom is null or @EmailFrom = '')
           + '@core-mark.com'
 
 
+IF (@EmailTo is null or @EmailTo = '' or @Subject is null or @Subject = '')
+BEGIN
+  raiserror('SendMail encountered a problem.  Make sure To From and Subject are not empty',10,1)
+  return -1
+END
        
        
 
@@ -93,4 +98,6 @@ exec msdb.dbo.sp_send_dbmail
     @file_attachments = @Attachment,
     @Importance       = @Importance
     
+
+go
 
