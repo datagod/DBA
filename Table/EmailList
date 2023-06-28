@@ -1,0 +1,21 @@
+use dba
+IF (object_id('EmailList') IS NOT NULL)
+BEGIN
+  print 'Dropping: EmailList'
+  drop table EmailList
+END
+print 'Creating: EmailList'
+go
+
+CREATE TABLE EmailList
+(
+  EmailID            int identity,
+  DistributionList   varchar(255) NOT NULL,
+  [Description]      varchar(255)
+)
+GO
+
+ALTER TABLE EmailList ADD 
+  CONSTRAINT PK_EmailList__EmailID PRIMARY KEY (EmailID)
+WITH  FILLFACTOR = 98
+GO
