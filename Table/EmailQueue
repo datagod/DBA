@@ -1,0 +1,36 @@
+---------------------------------------
+-- EmailQueue
+---------------------------------------
+
+IF (object_id('EmailQueue') IS NOT NULL)
+BEGIN
+  print 'Dropping: EmailQueue'
+  drop table EmailQueue
+END
+print 'Creating: EmailQueue'
+
+
+CREATE TABLE EmailQueue
+( 
+  EmailQueueID    int identity  NOT NULL,
+  StatusID        tinyint       NOT NULL default 0,         -- 0/1/2 queued/processing/sent
+  [To]            varchar(255)  NOT NULL,
+  [From]          varchar(255)  NOT NULL,
+  [Subject]       varchar(255)  NOT NULL,
+  Body            varchar(7000) NOT NULL,
+  HTML            char(1)       NOT NULL default 'N',
+  Attachment      varchar(255)      NULL,
+  Importance      varchar(10)       NOT NULL default 'NORMAL', -- LOW/NORMAL/HIGH
+  DateCreated     datetime      NOT NULL default getdate(),
+  DateUpdated     datetime          NULL default getdate()
+)
+IF (object_id('EmailQueue') IS NOT NULL)
+  print 'Table created.'
+ELSE
+  print 'Table NOT created.'
+GO
+
+ALTER TABLE EmailQueue ADD
+  CONSTRAINT PK_EmailQueue__EmailQueueID     PRIMARY KEY (EmailQueueID) WITH FILLFACTOR = 98
+
+  
