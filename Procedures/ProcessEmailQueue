@@ -1,0 +1,343 @@
+use DBA
+IF (object_id('ProcessEmailQueue') IS NOT NULL)
+BEGIN
+  PRINT 'Dropping: ProcessEmailQueue'
+  DROP PROCEDURE ProcessEmailQueue     
+END
+GO
+PRINT 'Creating: ProcessEmailQueue'
+GO
+create procedure ProcessEmailQueue
+as
+ 
+---------------------------------------------------------------------------------------------------
+-- Date Created: November 27, 2006
+-- Author:       William McEvoy
+--               
+-- Description:  This procedure processes the records in the EmailQueue.
+--               
+---------------------------------------------------------------------------------------------------
+-- Date Revised: November 30, 2006
+-- Author:       William McEvoy
+-- Reason:       Added more comprehensive logging.
+---------------------------------------------------------------------------------------------------
+-- Date Revised: 
+-- Author:       
+-- Reason:       
+---------------------------------------------------------------------------------------------------
+set nocount on
+
+
+---------------------------------------------------------------------
+-- Declare and initialize local variables                          --
+---------------------------------------------------------------------
+
+-- Standard Variables
+declare @error           int,
+        @rowcount        int,
+        @status          int,
+        @output          varchar(7000),
+        @TableAction     varchar(20),
+        @TableName       varchar(100),
+        @AdditionalInfo  varchar(500),
+        @ProcedureName   varchar(255),
+        @Database        varchar(128),
+        @Process         varchar(128)
+
+select  @error           = 0,
+        @rowcount        = 0,
+        @status          = 0,
+        @output          = '',
+        @ProcedureName   = '',
+        @AdditionalInfo  = '',
+        @Database        = db_name(),
+        @Process         = Object_Name(@@ProcID)
+
+
+-- Custom Variables
+declare @EmailQueueID    int,
+        @EmailsToProcess int,
+        @EmailsSent      int,
+        @DeleteCount     int,
+        @To              varchar(255),
+        @From            varchar(255),
+--        @Bcc             varchar(255), 
+        @Subject         varchar(255), 
+        @Body            varchar(7000),
+        @Style           char(4),      
+        @Attachment      varchar(255),
+        @ErrorMessage    varchar(255),
+        @Start           datetime,
+        @Finish          datetime,
+        @Seconds         decimal(10,2),
+        @EmailsPerSecond decimal(10,2),
+        @EmailsPerMinute decimal(10,2),
+        @Importance      varchar(10),
+        @HTML            char(1)
+
+
+select  @EmailQueueID    = 0,
+        @EmailQueueID    = 0,
+        @EmailsToProcess = 0,
+        @EmailsSent      = 0,
+        @DeleteCount     = 0,
+        @To              = '',
+        @From            = '',
+--        @Bcc             = '',
+        @Subject         = '',
+        @Body            = '',
+        @Style           = '',
+        @Attachment      = '',
+        @ErrorMessage    = '',
+        @Start           = getdate(),
+        @Seconds         = 0.00,
+        @EmailsPerSecond = 0.00,
+        @EmailsPerMinute = 0.00,
+        @Importance      = '',
+        @HTML            = 'N'
+
+
+---------------------------------------------------------------------
+-- Validate input parameters                                       --
+---------------------------------------------------------------------
+
+
+---------------------------------------------------------------------
+-- M A I N   P R O C E S S I N G                                   --
+---------------------------------------------------------------------
+--                                                                 --
+-- Process the Queue                                               --
+--                                                                 --
+-- Cleanup the Queue                                               --
+--                                                                 --
+---------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, ' '
+exec LogEvent @Process, @Database, '-----------------------'
+exec LogEvent @Process, @Database, '- Process Email Queue -'
+exec LogEvent @Process, @Database, '-----------------------'
+exec LogEvent @Process, @Database, 'Started:      <datetime>'
+
+
+---------------------------------------------------------------------
+-- Process the Queue                                               --
+---------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, 'Searching EmailQueue...' 
+
+
+DECLARE EmailQueue_Cursor CURSOR FAST_FORWARD FOR
+ SELECT EmailQueueID,
+        [To],
+        [From],
+        [Subject],
+        Body,
+        HTML,
+        Attachment,
+        Importance
+
+   FROM EmailQueue
+  WHERE StatusID = 0 -- Queued
+  ORDER BY EmailQueueID
+ 
+OPEN EmailQueue_Cursor
+
+FETCH NEXT 
+ FROM EmailQueue_Cursor
+ INTO @EmailQueueID,
+      @To,
+      @From,
+      @Subject,
+      @Body,
+      @HTML,
+      @Attachment,
+      @Importance
+
+WHILE (@@FETCH_STATUS <> -1)
+BEGIN
+  select @EmailsToProcess = @EmailsToProcess +1
+  -- We are only capturing 255 characters of the body at this point, because the email body has already been written to the event log
+  -- during the call to SendEmail.  This will allow us to visually identify the type of email without having to store the whole email (again)
+  -- in the event log.
+  --select @output = replace(left(master.dbo.ScrapeText(@body),255),char(13)+char(10),' ')
+  --select @output = replace(left(master.dbo.ScrapeText(@body),255),char(13)+char(10),' ')
+  select @Output = left(@Body,255)
+  exec LogEvent @Process, @Database,  'Processing EmailQueueID: ',@EmailQueueID, '   To: ',@To, '   From: ',@From, '   Subject: ',@Subject, '  Body: ', @Body
+
+  -- Update EmailQueue to indicate we are restoring the Log
+  update EmailQueue
+     set StatusID = 1 -- Processing
+   where EmailQueueID = @EmailQueueID
+
+  select @error    = @@ERROR,
+         @rowcount = @@ROWCOUNT
+
+  IF (@error <> 0) or (@rowcount <> 1)
+  BEGIN
+    select @TableAction    = 'update',
+           @TableName      = 'DBA.dbo.EmailQueue',
+           @AdditionalInfo = 'EmailQueueID: ' + convert(varchar(10),@EmailQueueID) + ' (setting status to ''Sending'')'
+    GOTO TableAccessError
+  END
+
+  -- Send the Email
+  exec @status = dba.dbo.SendEmail
+       @EmailTo      = @To,
+       @EmailFrom    = @From,
+       @Subject      = @Subject,
+       @Body         = @Body,
+       @Attachment   = @Attachment,
+       @Importance   = @Importance,
+       @HTML         = @HTML
+
+
+  IF (@status < 0) or (@ErrorMessage <> '')
+  BEGIN
+    -- ERROR EXECUTING PROCEDURE
+    select @ProcedureName  = 'dba.dbo.SendEmail'
+    select @AdditionalInfo = ' Error occurred while processing the EmailQueue. '
+    select @AdditionalInfo = @AdditionalInfo + ' @ErrorMessage: (' + @ErrorMessage + ')'
+    select @AdditionalInfo = @AdditionalInfo + ' @From: '    + @From
+    select @AdditionalInfo = @AdditionalInfo + ' @To: '      + @To
+    select @AdditionalInfo = @AdditionalInfo + ' @Subject: ' + @Subject
+    goto ProcedureError
+  END
+
+  select @EmailsSent = @EmailsSent + 1
+
+  -- Update EmailQueue to indicate we successfully restored the Log
+  update EmailQueue
+     set StatusID = 3 -- Sent
+   where EmailQueueID = @EmailQueueID
+
+  select @error    = @@ERROR,
+         @rowcount = @@ROWCOUNT
+
+  IF (@error <> 0) or (@rowcount <> 1)
+  BEGIN
+    select @TableAction    = 'update',
+           @TableName      = 'DBA.dbo.EmailQueue',
+           @AdditionalInfo = 'EmailQueueID: ' + convert(varchar(10),@EmailQueueID) + ' (setting status to ''Sent'')'
+    GOTO TableAccessError
+  END
+  
+  FETCH NEXT 
+   FROM EmailQueue_Cursor
+   INTO @EmailQueueID,
+        @To,
+        @From,
+        @Subject,
+        @Body,
+        @HTML,
+        @Attachment,
+        @Importance
+END    
+
+-- Calculate processing speed
+select @Seconds          = datediff(ss,@Start,getdate()) +1
+select @EmailsPerSecond = @EmailsSent / @Seconds
+select @EmailsPerMinute = @EmailsPerSecond * 60.00
+
+
+exec LogEvent @Process, @Database, 'Emails found: ',@EmailsToProcess
+exec LogEvent @Process, @Database, 'Emails sent:  ',@EmailsSent
+
+exec LogEvent @Process, @Database, 'Throughput:   ',@EmailsPerSecond, ' emails/sec  ', @EmailsPerMinute, ' emails/min'
+
+
+---------------------------------------------------------------------
+-- Cleanup the Queue                                               --
+---------------------------------------------------------------------
+
+exec LogEvent @Process, @Database, 'Removing old records from EmailQueue' 
+
+-- We delete records that have been successfully processed and are more than 20 minutes old
+delete 
+  from EmailQueue
+ where StatusID = 3
+   and DateUpdated <= getdate()-.01
+
+
+select @error    = @@ERROR,
+       @rowcount = @@ROWCOUNT
+
+IF (@error <> 0) 
+BEGIN
+  select @TableAction    = 'delete',
+         @TableName      = 'DBA.dbo.EmailQueue',
+         @AdditionalInfo = '(deleting expired EmailQueue records)'
+  GOTO TableAccessError
+END
+
+select @DeleteCount = @rowcount
+
+
+exec LogEvent @Process, @Database, 'EmailQueue records deleted: ',@DeleteCount
+exec LogEvent @Process, @Database, '--End--'
+exec LogEvent @Process, @Database, ' '
+
+CLOSE      EmailQueue_Cursor
+DEALLOCATE EmailQueue_Cursor
+
+return 0
+
+---------------------------------------------------------------------
+-- E R R O R   P R O C E S S I N G                                 --
+---------------------------------------------------------------------
+
+TableAccessError:
+select @output = upper(@TableAction) + 
+       ' ERROR - An error occurred while ' + 
+       case (@TableAction)
+         when 'update' then 'updating'
+         when 'delete' then 'deleting'
+         else @TableAction + 'ing'
+       end + 
+       ' records ' + 
+       case(@TableAction) 
+         when 'select' then 'from' 
+         when 'update' then 'in' 
+         when 'insert' then 'into'
+         else 'from'   
+         end  + 
+         ' the ' + @TableName + ' table.'
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+select @output = @output + '  @EmailQueueID: '   + isnull(convert(varchar(10),@EmailQueueID),'NULL')
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+ProcessingError:
+select @output = @output + '  @@ERROR: '         + convert(varchar(8),@error) 
+select @output = @output + '  @@ROWCOUNT: '      + convert(varchar(8),@rowcount) 
+select @output = @output + isnull(@AdditionalInfo,'')
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+ProcedureError:
+select @output = '(' + @Process + ') PROCEDURE ERROR - A sub-zero status code was returned from procedure ('+ @ProcedureName + ').'
+select @output = @output + '  @status: '  + convert(varchar(8),  @status) 
+select @output = @output + @AdditionalInfo
+exec LogEvent @Process, @Database, @Output
+RAISERROR(@output,16,1) with log
+GOTO THE_EXIT
+
+
+THE_EXIT:
+IF EXISTS(select 1 from master.dbo.syscursors where cursor_name = 'EmailQueue_Cursor')
+BEGIN
+  CLOSE      EmailQueue_Cursor
+  DEALLOCATE EmailQueue_Cursor
+END
+return -1
+GO
+
+
+IF (object_id('ProcessEmailQueue') IS NOT NULL)
+  PRINT 'Procedure created.'
+ELSE
+  PRINT 'Procedure NOT created.'
+GO
