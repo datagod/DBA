@@ -162,7 +162,9 @@ BEGIN
   --select @output = replace(left(master.dbo.ScrapeText(@body),255),char(13)+char(10),' ')
   --select @output = replace(left(master.dbo.ScrapeText(@body),255),char(13)+char(10),' ')
   select @Output = left(@Body,255)
-  exec LogEvent @Process, @Database,  'Processing EmailQueueID: ',@EmailQueueID, '   To: ',@To, '   From: ',@From, '   Subject: ',@Subject, '  Body: ', @Body
+  --exec LogEvent @Process, @Database,  ''
+  --exec LogEvent @Process, @Database,  '--------------------------------------------------------------'
+  exec LogEvent @Process, @Database,  'Processing EmailQueueID: ',@EmailQueueID, '   To: ',@To, '   From: ',@From, '   Subject: ',@Subject --,'  Body: ', @Body
 
   -- Update EmailQueue to indicate we are restoring the Log
   update EmailQueue
@@ -273,7 +275,7 @@ select @DeleteCount = @rowcount
 
 
 exec LogEvent @Process, @Database, 'EmailQueue records deleted: ',@DeleteCount
-exec LogEvent @Process, @Database, '--End--'
+exec LogEvent @Process, @Database, '--END--'
 exec LogEvent @Process, @Database, ' '
 
 CLOSE      EmailQueue_Cursor
