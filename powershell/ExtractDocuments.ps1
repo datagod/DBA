@@ -1,7 +1,7 @@
 
 # Connect to a SQL Server (without SQL module installed)
 # And extract files stored as IMAGE datatype
-
+# Created with ChatGPT4 
 
 [System.Reflection.Assembly]::LoadWithPartialName("System.Data.SqlClient") | Out-Null
 
