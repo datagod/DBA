@@ -1,0 +1,55 @@
+
+-- Create temporary table
+CREATE TABLE #TempLinkedServerTables (
+    LinkedServer sysname NULL,
+		TABLE_QUALIFIER sysname NULL,
+    TABLE_OWNER sysname NULL,
+    TABLE_NAME sysname NULL,
+    TABLE_TYPE sysname NULL,
+    REMARKS varchar(254) NULL
+);
+
+-- Cursor to iterate over linked servers
+DECLARE @LinkedServerName sysname;
+DECLARE linkedServerCursor CURSOR FOR 
+SELECT name FROM sys.servers WHERE is_linked = 1
+
+
+
+-- Open cursor
+OPEN linkedServerCursor;
+
+-- Fetch the next linked server
+FETCH NEXT FROM linkedServerCursor INTO @LinkedServerName
+
+-- Iterate over the linked servers
+WHILE @@FETCH_STATUS = 0
+BEGIN
+
+    BEGIN TRY
+      print ''
+      print ''
+			print '-------------------------------------------'
+		  print 'Processing: ' + @LinkedServerName
+			-- Insert results of sp_tables_ex into temporary table
+			INSERT INTO #TempLinkedServerTables (Table_Qualifier, TABLE_OWNER, TABLE_NAME, TABLE_TYPE, REMARKS)
+			EXEC sp_tables_ex @LinkedServerName;
+
+			update #TempLinkedServerTables
+				 set LinkedServer = @LinkedServerName
+			 where LinkedServer is null
+		END TRY
+		BEGIN CATCH
+		  print @@error
+  	  print '** ERROR OCCURRED: ' + @LinkedServerName
+		END CATCH
+
+		
+		-- Get the next linked server
+    FETCH NEXT FROM linkedServerCursor INTO @LinkedServerName;
+
+END
+
+-- Close and deallocate the cursor
+CLOSE linkedServerCursor;
+DEALLOCATE linkedServerCursor;
