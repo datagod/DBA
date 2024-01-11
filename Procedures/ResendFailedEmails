@@ -1,0 +1,60 @@
+USE msdb;
+GO
+-- Created with ChatGPT 4.0
+
+alter PROCEDURE dbo.ResendFailedEmails
+    @HoursAgo INT
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @mailitem_id INT, @recipients VARCHAR(MAX), @subject VARCHAR(255), @body NVARCHAR(MAX), @body_format NVARCHAR(20);
+    DECLARE @CutoffTime DATETIME = DATEADD(HOUR, -@HoursAgo, GETDATE());
+    DECLARE @ProfileName NVARCHAR(128);
+
+		declare @error int,
+		        @additionalInfo varchar(255)
+
+    -- Get the first mail profile
+    SELECT TOP 1 @ProfileName = name
+    FROM msdb.dbo.sysmail_profile
+    ORDER BY profile_id;
+
+    -- Cursor to iterate through failed emails from the past X hours
+    DECLARE failedMails CURSOR FOR
+    SELECT mailitem_id, recipients, subject, [body], body_format
+    FROM dbo.sysmail_faileditems
+    WHERE send_request_date > @CutoffTime;
+
+    OPEN failedMails;
+
+    -- Fetch each failed email
+    FETCH NEXT FROM failedMails INTO @mailitem_id, @recipients, @subject, @body, @body_format;
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY
+            -- Attempt to resend the email using the first email profile and respecting the original body format
+            EXEC msdb.dbo.sp_send_dbmail 
+                @profile_name = @ProfileName,
+                @recipients = @recipients, 
+                @subject = @subject, 
+                @body = @body,
+                @body_format = @body_format;
+
+            -- Optionally, log the successful resend or mark it in a table
+        END TRY
+        BEGIN CATCH
+          select @error          = ERROR_NUMBER(),
+                 @AdditionalInfo = '(sending email) '  + dbo.GetErrorInfo()
+				  print 'ERROR: ' + convert(varchar(15),@error)
+					print @AdditionalInfo
+        END CATCH
+
+        FETCH NEXT FROM failedMails INTO @mailitem_id, @recipients, @subject, @body, @body_format;
+    END
+
+    CLOSE failedMails;
+    DEALLOCATE failedMails;
+END;
+GO
