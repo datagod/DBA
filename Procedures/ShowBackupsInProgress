@@ -1,0 +1,24 @@
+-- Created with ChatGPT 2024
+
+alter PROCEDURE ShowBackupsInProgress
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    SELECT 
+        db_name(database_id) as 'Database',
+        session_id,
+        command,
+        status,
+        CONVERT(varchar, start_time, 120) AS start_time, -- Converts datetime to 'YYYY-MM-DD HH:MI:SS' format
+        percent_complete,
+        -- Converts the estimated_completion_time from milliseconds to a time format
+        CONVERT(varchar, DATEADD(ms, estimated_completion_time, 0), 114) AS estimated_completion_time
+        ,*
+    FROM 
+        sys.dm_exec_requests
+    WHERE 
+        command like '%BACKUP%'
+        --command IN ('BACKUP DATABASE', 'BACKUP LOG');
+END;
+GO
