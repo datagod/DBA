@@ -1,0 +1,48 @@
+use intranet
+go
+
+/*
+Created using ChatGPT 4.0
+*/
+
+CREATE PROCEDURE ReplaceTextInStoredProcedures
+    @SearchText NVARCHAR(MAX),
+    @ReplaceText NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @Name NVARCHAR(128)
+    DECLARE @Definition NVARCHAR(MAX)
+    DECLARE @NewDefinition NVARCHAR(MAX)
+    DECLARE @SQL NVARCHAR(MAX)
+
+    DECLARE db_cursor CURSOR FOR 
+    SELECT 
+        ROUTINE_NAME, 
+        ROUTINE_DEFINITION 
+    FROM 
+        INFORMATION_SCHEMA.ROUTINES 
+    WHERE 
+        ROUTINE_TYPE = 'PROCEDURE' 
+        AND ROUTINE_DEFINITION LIKE '%' + @SearchText + '%'
+        AND OBJECTPROPERTY(OBJECT_ID(ROUTINE_NAME), 'IsMSShipped') = 0
+
+    OPEN db_cursor  
+    FETCH NEXT FROM db_cursor INTO @Name, @Definition
+
+    WHILE @@FETCH_STATUS = 0  
+    BEGIN  
+        print 'Modifying: ' + @Name
+		SET @NewDefinition = REPLACE(@Definition, @SearchText, @ReplaceText)
+        
+        SET @SQL = 'ALTER PROCEDURE [' + @Name + '] ' + @NewDefinition
+        EXEC sp_executesql @SQL
+        
+        FETCH NEXT FROM db_cursor INTO @Name, @Definition
+    END
+
+    CLOSE db_cursor  
+    DEALLOCATE db_cursor
+END
+GO
