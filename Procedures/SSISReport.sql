@@ -47,7 +47,8 @@ AS (SELECT operation_id
     FROM SSISDB.catalog.operations op
     WHERE op.operation_type = 200
           AND object_id IS NOT NULL
-          AND object_name LIKE 'CDW%')
+          --AND object_name LIKE '%YOUR PROJECT NAME%'
+  )
 SELECT object_id
      , object_name
      , @NumRecPerObject + 1 - RowNum RowNum
