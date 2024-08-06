@@ -73,7 +73,6 @@ select top 100 * from ssisdb.catalog.event_messages
 order by event_message_id desc
 
 select top 100 * from SSISDB.catalog.operations 
-where object_name = 'CDW CRM'
 order by operation_id desc
 
 
@@ -81,7 +80,7 @@ select top 100 * from ssisdb.catalog.event_message_context
 order by context_id desc
 
 select top 100 * from ssisdb.internal.execution_info
-where folder_name = 'cdw realtime'
+where folder_name = 'Foobar'
 order by execution_id desc
 
 
