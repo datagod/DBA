@@ -1,0 +1,26 @@
+create or alter procedure ShowCurrentWaits
+as
+SELECT 
+    r.session_id,
+    r.command,
+    r.percent_complete,
+    r.start_time,
+    r.status,
+    r.wait_type,
+
+    -- Convert the times to hours and minutes
+    CONVERT(VARCHAR, DATEADD(ms, r.wait_time, 0), 108) AS wait_time_hhmmss,
+    CONVERT(VARCHAR, DATEADD(ms, r.cpu_time, 0), 108) AS cpu_time_hhmmss,
+    CONVERT(VARCHAR, DATEADD(ms, r.total_elapsed_time, 0), 108) AS total_elapsed_time_hhmmss,
+
+    r.last_wait_type,
+    r.total_elapsed_time,
+    r.reads,
+    r.writes,
+    r.logical_reads,
+    r.granted_query_memory,
+    dbo.fn_WaitTypeExplanation(r.last_wait_type)
+FROM 
+    sys.dm_exec_requests r
+WHERE session_id >= 50
+GO
