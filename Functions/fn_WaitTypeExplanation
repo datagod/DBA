@@ -1,0 +1,80 @@
+CREATE or alter FUNCTION dbo.fn_WaitTypeExplanation (@wait_type NVARCHAR(60))
+RETURNS NVARCHAR(255)
+AS
+BEGIN
+    DECLARE @explanation NVARCHAR(255)
+
+    SET @explanation = 
+    CASE @wait_type
+        -- CPU-related waits
+        WHEN 'SOS_SCHEDULER_YIELD' THEN 'Occurs when a task voluntarily yields the processor after running for its quantum of time.'
+        WHEN 'CXPACKET' THEN 'Occurs when the parallelism coordination of multiple threads is not optimized, often due to inefficient query execution plans.'
+        WHEN 'THREADPOOL' THEN 'Occurs when SQL Server cannot create or run a new worker thread due to a lack of available threads.'
+        WHEN 'SOS_RESERVEDMEMBLOCKLIST' THEN 'Occurs when a query is waiting for memory grant resources for parallel queries.'
+
+        -- I/O-related waits
+        WHEN 'PAGEIOLATCH_SH' THEN 'Occurs when SQL Server is waiting on reading a page from disk into memory. Often related to slow I/O performance.'
+        WHEN 'PAGEIOLATCH_EX' THEN 'Occurs when SQL Server is waiting for an exclusive page latch, typically related to disk I/O.'
+        WHEN 'WRITELOG' THEN 'Occurs when SQL Server is waiting for a transaction log flush to disk. May indicate slow log write performance.'
+        WHEN 'ASYNC_IO_COMPLETION' THEN 'Occurs when SQL Server is waiting for asynchronous disk I/O operations to complete.'
+        WHEN 'DISKIO_SUSPEND' THEN 'Occurs when a task is suspended while waiting for disk I/O operations to resume.'
+        WHEN 'IO_COMPLETION' THEN 'Occurs when SQL Server is waiting for I/O operations to complete, often related to data or log file operations.'
+
+        -- Lock-related waits
+        WHEN 'LCK_M_X' THEN 'Occurs when a transaction is waiting for an exclusive lock on a resource, such as a row or table.'
+        WHEN 'LCK_M_S' THEN 'Occurs when a transaction is waiting for a shared lock on a resource.'
+        WHEN 'LCK_M_U' THEN 'Occurs when a transaction is waiting for an update lock on a resource.'
+        WHEN 'LCK_M_IS' THEN 'Occurs when a transaction is waiting for an intent shared lock on a resource.'
+        WHEN 'LCK_M_IX' THEN 'Occurs when a transaction is waiting for an intent exclusive lock on a resource.'
+        WHEN 'LCK_M_BU' THEN 'Occurs when a transaction is waiting for a bulk update lock on a resource.'
+        WHEN 'LCK_M_RS' THEN 'Occurs when a transaction is waiting for a shared range lock on a resource.'
+
+        -- Memory-related waits
+        WHEN 'RESOURCE_SEMAPHORE' THEN 'Occurs when SQL Server is waiting for memory resources that are reserved for query execution.'
+        WHEN 'MEMORY_ALLOCATION_EXT' THEN 'Occurs when SQL Server is waiting for memory allocations outside of the buffer pool.'
+        WHEN 'RESOURCE_SEMAPHORE_QUERY_COMPILE' THEN 'Occurs when SQL Server is waiting to allocate memory for query compilation.'
+        WHEN 'RESOURCE_SEMAPHORE_SMALL_QUERY' THEN 'Occurs when SQL Server is waiting for memory resources for small query executions.'
+        WHEN 'RESOURCE_SEMAPHORE_MUTEX' THEN 'Occurs when SQL Server is waiting for a mutex to control access to shared resources.'
+
+        -- Network-related waits
+        WHEN 'ASYNC_NETWORK_IO' THEN 'Occurs when SQL Server is waiting for the client to consume data. Often related to slow network performance or application issues.'
+        WHEN 'NETWORK_IO' THEN 'Occurs when SQL Server is waiting on network I/O operations, often related to large data transfers.'
+
+        -- Backup/Restore-related waits
+        WHEN 'BACKUPIO' THEN 'Occurs when SQL Server is performing a backup operation and is waiting for the I/O to complete.'
+        WHEN 'BACKUPBUFFER' THEN 'Occurs when SQL Server is waiting for the backup buffer to be processed.'
+        WHEN 'RESTOREIO' THEN 'Occurs when SQL Server is waiting for I/O operations to complete during a restore operation.'
+
+        -- Transaction-related waits
+        WHEN 'LOGMGR_QUEUE' THEN 'Occurs when SQL Server is waiting on log manager operations, often related to log file writes.'
+        WHEN 'XACT_OWN_TRANSACTION' THEN 'Occurs when SQL Server is waiting for a transaction to complete.'
+        WHEN 'XACT_REDO' THEN 'Occurs during database recovery when SQL Server is redoing transactions.'
+
+        -- Miscellaneous waits
+        WHEN 'CLR_SEMAPHORE' THEN 'Occurs when SQL Server is waiting on a Common Language Runtime (CLR) task to complete.'
+        WHEN 'PREEMPTIVE_OS_AUTHENTICATIONOPS' THEN 'Occurs when SQL Server is waiting on an external task, often related to authentication operations.'
+        WHEN 'PREEMPTIVE_OS_FILEOPS' THEN 'Occurs when SQL Server is waiting on an external file operation, such as a file system operation.'
+        WHEN 'PAGELATCH_SH' THEN 'Occurs when SQL Server is waiting on a latch for a data page in memory.'
+
+        -- In-Memory OLTP-related waits
+        WHEN 'HADR_SYNC_COMMIT' THEN 'Occurs when a transaction is waiting for commit acknowledgement from synchronous replicas in an Always On availability group.'
+        WHEN 'HADR_DATA_MOVER_REDO' THEN 'Occurs when the redo thread on a secondary replica is applying log records.'
+
+        -- Service Broker-related waits
+        WHEN 'BROKER_RECEIVE_WAITFOR' THEN 'Occurs when the Service Broker waits for a message to arrive in the queue.'
+        WHEN 'BROKER_TASK_STOP' THEN 'Occurs when Service Broker tasks are waiting to be stopped.'
+
+        -- Extended Events-related waits
+        WHEN 'XE_TIMER_EVENT' THEN 'Occurs when SQL Server is waiting for a timer event to trigger in Extended Events.'
+        WHEN 'XE_DISPATCHER_WAIT' THEN 'Occurs when SQL Server is waiting for an Extended Events dispatcher operation.'
+
+        -- Default for unknown wait types
+        ELSE 'Unknown or uncommon wait type.'
+    END
+
+    RETURN @explanation
+END
+GO
+
+
+ 
