@@ -1,0 +1,259 @@
+GO
+CREATE OR ALTER PROCEDURE dbo.GetTableMetadataXml
+    @Schema sysname,
+    @Table  sysname
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    DECLARE @obj_id int = OBJECT_ID(QUOTENAME(@Schema) + N'.' + QUOTENAME(@Table));
+    IF @obj_id IS NULL
+    BEGIN
+        ;THROW 50001, 'Table not found for given schema/name.', 1;
+    END
+
+    ;WITH
+    tbl AS (
+        SELECT
+            s.name  AS schema_name,
+            t.name  AS table_name,
+            t.object_id,
+            t.create_date
+        FROM sys.tables t
+        JOIN sys.schemas s ON s.schema_id = t.schema_id
+        WHERE t.object_id = @obj_id
+    ),
+    cols AS (
+        SELECT
+            c.column_id,
+            c.name AS column_name,
+            TYPE_NAME(c.user_type_id) AS type_name,
+            c.max_length,
+            c.precision,
+            c.scale,
+            c.is_nullable,
+            c.is_identity,
+            c.is_computed,
+            dc.definition AS default_definition,
+            c.collation_name,
+            ic.seed_value,
+            ic.increment_value
+        FROM sys.columns c
+        LEFT JOIN sys.default_constraints dc
+          ON dc.parent_object_id = c.object_id
+         AND dc.parent_column_id = c.column_id
+        LEFT JOIN sys.identity_columns ic
+          ON ic.object_id = c.object_id
+         AND ic.column_id = c.column_id
+        WHERE c.object_id = @obj_id
+    ),
+    idx AS (
+        SELECT
+            i.index_id,
+            i.name,
+            i.type_desc,
+            i.is_primary_key,
+            i.is_unique
+        FROM sys.indexes i
+        WHERE i.object_id = @obj_id
+          AND i.index_id > 0
+          AND i.is_hypothetical = 0
+    ),
+    idx_keys AS (
+        SELECT
+            ic.index_id,
+            ic.key_ordinal,
+            c.name AS column_name,
+            0 AS is_included
+        FROM sys.index_columns ic
+        JOIN sys.columns c
+          ON c.object_id = ic.object_id
+         AND c.column_id = ic.column_id
+        WHERE ic.object_id = @obj_id
+          AND ic.is_included_column = 0
+    ),
+    idx_includes AS (
+        SELECT
+            ic.index_id,
+            ic.index_column_id AS include_ordinal,
+            c.name AS column_name,
+            1 AS is_included
+        FROM sys.index_columns ic
+        JOIN sys.columns c
+          ON c.object_id = ic.object_id
+         AND c.column_id = ic.column_id
+        WHERE ic.object_id = @obj_id
+          AND ic.is_included_column = 1
+    ),
+    kcons AS (
+        SELECT
+            kc.name,
+            kc.type_desc,
+            kc.unique_index_id
+        FROM sys.key_constraints kc
+        WHERE kc.parent_object_id = @obj_id
+    ),
+    ck AS (
+        SELECT
+            cc.name,
+            cc.definition
+        FROM sys.check_constraints cc
+        WHERE cc.parent_object_id = @obj_id
+    ),
+    fks AS (
+        SELECT
+            fk.object_id AS fk_id,
+            fk.name,
+            OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS ref_schema,
+            OBJECT_NAME(fk.referenced_object_id)        AS ref_table
+        FROM sys.foreign_keys fk
+        WHERE fk.parent_object_id = @obj_id
+    ),
+    fk_parent_cols AS (
+        SELECT
+            fkc.constraint_object_id AS fk_id,
+            fkc.constraint_column_id AS ord,
+            pc.name AS column_name
+        FROM sys.foreign_key_columns fkc
+        JOIN sys.columns pc
+          ON pc.object_id = fkc.parent_object_id
+         AND pc.column_id = fkc.parent_column_id
+        WHERE fkc.parent_object_id = @obj_id
+    ),
+    fk_ref_cols AS (
+        SELECT
+            fkc.constraint_object_id AS fk_id,
+            fkc.constraint_column_id AS ord,
+            rc.name AS column_name
+        FROM sys.foreign_key_columns fkc
+        JOIN sys.columns rc
+          ON rc.object_id = fkc.referenced_object_id
+         AND rc.column_id = fkc.referenced_column_id
+        WHERE fkc.parent_object_id = @obj_id
+    )
+    SELECT
+        t.schema_name AS [@schema],
+        t.table_name  AS [@name],
+        t.object_id   AS [@object_id],
+        t.create_date AS [@create_date],
+
+        -- Columns
+        (
+            SELECT
+                c.column_id        AS [@ordinal],
+                c.column_name      AS [@name],
+                c.type_name        AS [@type],
+                CASE WHEN c.max_length = -1 THEN 'MAX' ELSE CAST(c.max_length AS varchar(10)) END AS [@length],
+                c.precision        AS [@precision],
+                c.scale            AS [@scale],
+                c.is_nullable      AS [@nullable],
+                c.is_identity      AS [@is_identity],
+                c.seed_value       AS [@identity_seed],
+                c.increment_value  AS [@identity_increment],
+                c.is_computed      AS [@is_computed],
+                c.default_definition AS [@default],
+                c.collation_name   AS [@collation]
+            FROM cols c
+            ORDER BY c.column_id
+            FOR XML PATH('Column'), TYPE
+        ) AS [Columns],
+
+        -- Indexes
+        (
+            SELECT
+                i.name          AS [@name],
+                i.type_desc     AS [@type],
+                i.is_primary_key AS [@is_primary_key],
+                i.is_unique     AS [@is_unique],
+
+                -- Key columns as nested elements
+                (
+                    SELECT
+                        k.key_ordinal AS [@ordinal],
+                        k.column_name AS [@name]
+                    FROM idx_keys k
+                    WHERE k.index_id = i.index_id
+                    ORDER BY k.key_ordinal
+                    FOR XML PATH('Column'), TYPE
+                ) AS [KeyColumns],
+
+                -- Include columns as nested elements
+                (
+                    SELECT
+                        inc.include_ordinal AS [@ordinal],
+                        inc.column_name     AS [@name]
+                    FROM idx_includes inc
+                    WHERE inc.index_id = i.index_id
+                    ORDER BY inc.include_ordinal
+                    FOR XML PATH('Column'), TYPE
+                ) AS [IncludeColumns]
+            FROM idx i
+            ORDER BY CASE WHEN i.is_primary_key = 1 THEN 0 ELSE 1 END, i.name
+            FOR XML PATH('Index'), TYPE
+        ) AS [Indexes],
+
+        -- Constraints
+        (
+            SELECT
+                -- PK/UNIQUE constraints with their columns
+                (
+                    SELECT
+                        kc.type_desc AS [@type],
+                        kc.name      AS [@name],
+                        (
+                            SELECT
+                                ic.key_ordinal AS [@ordinal],
+                                c.name         AS [@name]
+                            FROM sys.index_columns ic
+                            JOIN sys.columns c
+                              ON c.object_id = ic.object_id
+                             AND c.column_id = ic.column_id
+                            WHERE ic.object_id = @obj_id
+                              AND ic.index_id  = kc.unique_index_id
+                              AND ic.is_included_column = 0
+                            ORDER BY ic.key_ordinal
+                            FOR XML PATH('Column'), TYPE
+                        ) AS [Columns]
+                    FROM kcons kc
+                    FOR XML PATH('KeyConstraint'), TYPE
+                ),
+
+                -- CHECK constraints
+                (
+                    SELECT
+                        ck.name        AS [@name],
+                        ck.definition  AS [@definition]
+                    FROM ck
+                    FOR XML PATH('CheckConstraint'), TYPE
+                ),
+
+                -- FOREIGN KEYs
+                (
+                    SELECT
+                        f.name       AS [@name],
+                        f.ref_schema AS [@referenced_schema],
+                        f.ref_table  AS [@referenced_table],
+                        (
+                            SELECT pc.ord AS [@ordinal], pc.column_name AS [@name]
+                            FROM fk_parent_cols pc
+                            WHERE pc.fk_id = f.fk_id
+                            ORDER BY pc.ord
+                            FOR XML PATH('Column'), TYPE
+                        ) AS [ParentColumns],
+                        (
+                            SELECT rc.ord AS [@ordinal], rc.column_name AS [@name]
+                            FROM fk_ref_cols rc
+                            WHERE rc.fk_id = f.fk_id
+                            ORDER BY rc.ord
+                            FOR XML PATH('Column'), TYPE
+                        ) AS [ReferencedColumns]
+                    FROM fks f
+                    FOR XML PATH('ForeignKey'), TYPE
+                )
+            FOR XML PATH(''), TYPE
+        ) AS [Constraints]
+    FROM tbl t
+    FOR XML PATH('Table'), ROOT('TableMetadata');
+END
+GO
+
