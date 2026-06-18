@@ -1,3 +1,5 @@
+
+
 /*
   ShowIndexUsageReport.sql
   Performance Tuning Framework
@@ -8,7 +10,7 @@
   Optional parameters:
     @SchemaFilter  - schema name filter (default '%')
     @TableFilter   - table name filter (default '%')
-    @ReportWidth   - report line width in characters (default 100, range 80-120)
+    @ReportWidth   - kept for backward compatibility; report layout is fixed at 120 characters
     @SortBy        - READS | WRITES | SIZE | OBJECT | LAST_USE
 */
 
@@ -21,7 +23,7 @@ CREATE OR ALTER PROCEDURE dbo.ShowIndexUsageReport
 (
     @SchemaFilter  sysname      = '%',
     @TableFilter   sysname      = '%',
-    @ReportWidth   tinyint      = 100,
+    @ReportWidth   tinyint      = 120,
     @SortBy        varchar(10)  = 'READS'
 )
 AS
@@ -46,6 +48,7 @@ DECLARE
     @RestartKnown        bit,
     @Divider             varchar(120),
     @HeaderRule          varchar(120),
+    @BlankLine           varchar(120),
     @ObjectWidth         tinyint,
     @IndexWidth          tinyint,
     @TypeWidth           tinyint,
@@ -61,8 +64,9 @@ DECLARE
     @LineNo              int,
     @SortByUpper         varchar(10)
 
-IF @ReportWidth < 80 OR @ReportWidth > 120
-    SET @ReportWidth = 100
+-- This layout is calibrated to exactly 120 printable characters.
+-- Keep the parameter so existing callers do not break, but force the report width.
+SET @ReportWidth = 120
 
 SET @SortByUpper = UPPER(ISNULL(@SortBy, 'READS'))
 IF @SortByUpper NOT IN ('READS', 'WRITES', 'SIZE', 'OBJECT', 'LAST_USE')
@@ -82,13 +86,15 @@ SET @ReportTime     = CONVERT(varchar(19), GETDATE(), 120)
 SET @RestartKnown   = CASE WHEN @MajorVersion >= 10 THEN 1 ELSE 0 END
 SET @Divider        = REPLICATE('-', @ReportWidth)
 SET @HeaderRule     = REPLICATE('=', @ReportWidth)
+SET @BlankLine      = REPLICATE(' ', @ReportWidth)
 
-SET @ObjectWidth = 28
-SET @IndexWidth  = 20
+-- Column widths total 111 characters; 9 one-character separators make 120.
+SET @ObjectWidth = 34
+SET @IndexWidth  = 28
 SET @TypeWidth   = 3
-SET @NumWidth    = 6
-SET @RatioWidth  = 4
-SET @SizeWidth   = 6
+SET @NumWidth    = 7
+SET @RatioWidth  = 5
+SET @SizeWidth   = 8
 SET @DateWidth   = 5
 
 IF OBJECT_ID('tempdb..#IndexUsage') IS NOT NULL
@@ -118,7 +124,7 @@ IF OBJECT_ID('tempdb..#Report') IS NOT NULL
 
 CREATE TABLE #Report
 (
-    LineNo      int          NOT NULL,
+    [LineNo]      int          NOT NULL,
     ReportLine  varchar(200) NOT NULL
 )
 
@@ -142,7 +148,7 @@ END
     INNER JOIN sys.allocation_units AS a
         ON p.partition_id = a.container_id
     GROUP BY p.object_id, p.index_id
-),
+)
 INSERT INTO #IndexUsage
 (
     SortKey,
@@ -247,112 +253,116 @@ FROM #IndexUsage
 
 SET @LineNo = 0
 
-INSERT INTO #Report (LineNo, ReportLine)
+INSERT INTO #Report ([LineNo], ReportLine)
 SELECT @LineNo, LEFT(@HeaderRule, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 1, LEFT(' INDEX USAGE REPORT', @ReportWidth)
+SELECT @LineNo + 1, LEFT(' INDEX USAGE REPORT' + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 2,
        LEFT(' Database: ' + @DatabaseName
             + REPLICATE(' ', 2)
             + 'Server: ' + @ServerName
-            + '  ' + @ReportTime, @ReportWidth)
+            + '  ' + @ReportTime + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 3,
        LEFT(' SQL Server ' + @ProductVersion + ' ' + @ProductLevel
-            + '  |  ' + LEFT(@Edition, 24), @ReportWidth)
+            + '  |  ' + LEFT(@Edition, 24) + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 4,
        LEFT(' Stats since restart: ' + @RestartTime
-            + CASE WHEN @MajorVersion < 10 THEN '  (upgrade to SQL 2008+ for start time)' ELSE '' END, @ReportWidth)
+            + CASE WHEN @MajorVersion < 10 THEN '  (upgrade to SQL 2008+ for start time)' ELSE '' END
+            + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 5, LEFT(@HeaderRule, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 6,
        LEFT(' ' + CAST(@TotalIndexes AS varchar(10)) + ' indexes'
             + '  |  ' + CAST(@UnusedIndexes AS varchar(10)) + ' unused (0 reads, has writes)'
-            + '  |  ' + CAST(@WriteHeavyIndexes AS varchar(10)) + ' write-heavy', @ReportWidth)
+            + '  |  ' + CAST(@WriteHeavyIndexes AS varchar(10)) + ' write-heavy'
+            + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 7,
        LEFT(' ' + CAST(@DisabledIndexes AS varchar(10)) + ' disabled'
             + '  |  ' + CAST(@NeverSampled AS varchar(10)) + ' not in usage cache since restart'
-            + '  |  sort: ' + @SortByUpper, @ReportWidth)
+            + '  |  sort: ' + @SortByUpper
+            + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 8, LEFT(@Divider, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 9,
        LEFT(
-            LEFT('OBJECT', @ObjectWidth)
-            + ' ' + LEFT('INDEX', @IndexWidth)
-            + ' ' + LEFT('TYP', @TypeWidth)
-            + ' ' + LEFT('SEEKS', @NumWidth)
-            + ' ' + LEFT('SCANS', @NumWidth)
-            + ' ' + LEFT('LOOK', @NumWidth)
-            + ' ' + LEFT('UPD', @NumWidth)
-            + ' ' + LEFT('R/W', @RatioWidth)
-            + ' ' + LEFT('MB', @SizeWidth)
-            + ' ' + LEFT('USED', @DateWidth),
+              LEFT('OBJECT' + @BlankLine, @ObjectWidth)
+            + ' ' + LEFT('INDEX' + @BlankLine, @IndexWidth)
+            + ' ' + LEFT('TYP' + @BlankLine, @TypeWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'SEEKS', @NumWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'SCANS', @NumWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'LOOK', @NumWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'UPD', @NumWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @RatioWidth) + 'R/W', @RatioWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @SizeWidth) + 'MB', @SizeWidth)
+            + ' ' + LEFT('USED' + @BlankLine, @DateWidth),
             @ReportWidth)
 UNION ALL
 SELECT @LineNo + 10, LEFT(@Divider, @ReportWidth)
 
-INSERT INTO #Report (LineNo, ReportLine)
+INSERT INTO #Report ([LineNo], ReportLine)
 SELECT
     ROW_NUMBER() OVER (ORDER BY u.SortKey DESC, u.ObjectName, u.IndexName) + 10,
     LEFT(
-          LEFT(u.ObjectName + REPLICATE(' ', @ObjectWidth), @ObjectWidth)
-        + LEFT(u.IndexName + REPLICATE(' ', @IndexWidth), @IndexWidth)
-        + LEFT(u.TypeAbbr + REPLICATE(' ', @TypeWidth), @TypeWidth)
-        + RIGHT(REPLICATE(' ', @NumWidth) + CASE
+          LEFT(u.ObjectName + @BlankLine, @ObjectWidth)
+        + ' ' + LEFT(u.IndexName + @BlankLine, @IndexWidth)
+        + ' ' + LEFT(u.TypeAbbr + @BlankLine, @TypeWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + CASE
                 WHEN u.UserSeeks >= 1000000000 THEN CAST(u.UserSeeks / 1000000000 AS varchar(10)) + 'B'
                 WHEN u.UserSeeks >= 1000000 THEN LTRIM(STR(u.UserSeeks / 1000000.0, 4, 1)) + 'M'
                 WHEN u.UserSeeks >= 10000 THEN CAST(u.UserSeeks / 1000 AS varchar(10)) + 'K'
                 WHEN u.UserSeeks >= 1000 THEN LTRIM(STR(u.UserSeeks / 1000.0, 4, 1)) + 'K'
                 ELSE CAST(u.UserSeeks AS varchar(10))
             END, @NumWidth)
-        + RIGHT(REPLICATE(' ', @NumWidth) + CASE
+        + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + CASE
                 WHEN u.UserScans >= 1000000000 THEN CAST(u.UserScans / 1000000000 AS varchar(10)) + 'B'
                 WHEN u.UserScans >= 1000000 THEN LTRIM(STR(u.UserScans / 1000000.0, 4, 1)) + 'M'
                 WHEN u.UserScans >= 10000 THEN CAST(u.UserScans / 1000 AS varchar(10)) + 'K'
                 WHEN u.UserScans >= 1000 THEN LTRIM(STR(u.UserScans / 1000.0, 4, 1)) + 'K'
                 ELSE CAST(u.UserScans AS varchar(10))
             END, @NumWidth)
-        + RIGHT(REPLICATE(' ', @NumWidth) + CASE
+        + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + CASE
                 WHEN u.UserLookups >= 1000000000 THEN CAST(u.UserLookups / 1000000000 AS varchar(10)) + 'B'
                 WHEN u.UserLookups >= 1000000 THEN LTRIM(STR(u.UserLookups / 1000000.0, 4, 1)) + 'M'
                 WHEN u.UserLookups >= 10000 THEN CAST(u.UserLookups / 1000 AS varchar(10)) + 'K'
                 WHEN u.UserLookups >= 1000 THEN LTRIM(STR(u.UserLookups / 1000.0, 4, 1)) + 'K'
                 ELSE CAST(u.UserLookups AS varchar(10))
             END, @NumWidth)
-        + RIGHT(REPLICATE(' ', @NumWidth) + CASE
+        + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + CASE
                 WHEN u.UserUpdates >= 1000000000 THEN CAST(u.UserUpdates / 1000000000 AS varchar(10)) + 'B'
                 WHEN u.UserUpdates >= 1000000 THEN LTRIM(STR(u.UserUpdates / 1000000.0, 4, 1)) + 'M'
                 WHEN u.UserUpdates >= 10000 THEN CAST(u.UserUpdates / 1000 AS varchar(10)) + 'K'
                 WHEN u.UserUpdates >= 1000 THEN LTRIM(STR(u.UserUpdates / 1000.0, 4, 1)) + 'K'
                 ELSE CAST(u.UserUpdates AS varchar(10))
             END, @NumWidth)
-        + RIGHT(REPLICATE(' ', @RatioWidth) + LEFT(u.ReadWriteRatio, @RatioWidth), @RatioWidth)
-        + RIGHT(REPLICATE(' ', @SizeWidth) + CAST(u.SizeMB AS varchar(10)), @SizeWidth)
-        + u.LastUseDate,
+        + ' ' + RIGHT(REPLICATE(' ', @RatioWidth) + LEFT(u.ReadWriteRatio, @RatioWidth), @RatioWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @SizeWidth) + CAST(u.SizeMB AS varchar(10)), @SizeWidth)
+        + ' ' + LEFT(u.LastUseDate + @BlankLine, @DateWidth),
         @ReportWidth)
   FROM #IndexUsage AS u
 
 SELECT @LineNo = 10 + COUNT(*) + 1
   FROM #IndexUsage
 
-INSERT INTO #Report (LineNo, ReportLine)
+INSERT INTO #Report ([LineNo], ReportLine)
 SELECT @LineNo, LEFT(@Divider, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 1, LEFT(' Legend: CL=clustered  NC=nonclustered  HP=heap  CC/CS=columnstore  *=disabled', @ReportWidth)
+SELECT @LineNo + 1, LEFT(' Legend: CL=clustered  NC=nonclustered  HP=heap  CC/CS=columnstore  *=disabled' + @BlankLine, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 2, LEFT(' USED=last seek/scan/lookup/update (MM-DD). R/W=read operations per write.', @ReportWidth)
+SELECT @LineNo + 2, LEFT(' USED=last seek/scan/lookup/update (MM-DD). R/W=read operations per write.' + @BlankLine, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 3, LEFT(' Note: usage stats reset at instance restart; missing rows mean no activity since restart.', @ReportWidth)
+SELECT @LineNo + 3, LEFT(' Note: usage stats reset at instance restart; missing rows mean no activity since restart.' + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 4, LEFT(@HeaderRule, @ReportWidth)
 
 SELECT ReportLine
   FROM #Report
- ORDER BY LineNo
+ ORDER BY [LineNo]
 
 GO
+
