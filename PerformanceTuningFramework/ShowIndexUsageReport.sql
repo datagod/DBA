@@ -4,11 +4,12 @@
   ShowIndexUsageReport.sql
   Performance Tuning Framework
 
-  Deploy to the tool database, create IndexAnalysis first, then execute:
+  Deploy to the tool database, create IndexAnalysis first, run AnalyzeIndexes, then execute:
     EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase'
 
   Optional parameters:
-    @TargetDatabase - database to analyze (default: current database)
+    @TargetDatabase - database reported on (default: current database)
+    @AnalysisRunID  - specific capture run (default: latest for @TargetDatabase)
     @SchemaFilter   - schema name filter (default '%')
     @TableFilter    - table name filter (default '%')
     @ReportWidth    - kept for backward compatibility; report layout is fixed at 120 characters
@@ -22,18 +23,19 @@ GO
 
 CREATE OR ALTER PROCEDURE dbo.ShowIndexUsageReport
 (
-    @TargetDatabase sysname      = NULL,
-    @SchemaFilter   sysname      = '%',
-    @TableFilter    sysname      = '%',
-    @ReportWidth    tinyint      = 120,
-    @SortBy         varchar(10)  = 'READS'
+    @TargetDatabase sysname           = NULL,
+    @AnalysisRunID  uniqueidentifier  = NULL,
+    @SchemaFilter   sysname           = '%',
+    @TableFilter    sysname           = '%',
+    @ReportWidth    tinyint           = 120,
+    @SortBy         varchar(10)       = 'READS'
 )
 AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: June 18, 2026
 -- Author:       Bill McEvoy
--- Description:  Version-aware index usage report. Calls AnalyzeIndexes to capture data into
---               IndexAnalysis, then returns a fixed-width, screen-friendly text report.
+-- Description:  Version-aware index usage report. Reads captured data from IndexAnalysis and
+--               returns a fixed-width, screen-friendly text report.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -64,10 +66,42 @@ DECLARE
     @NeverSampled        int,
     @LineNo              int,
     @SortByUpper         varchar(10),
-    @AnalysisRunID       uniqueidentifier
+    @CaptureDate         varchar(19)
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
+
+IF OBJECT_ID('dbo.IndexAnalysis') IS NULL
+BEGIN
+    RAISERROR('Table dbo.IndexAnalysis does not exist. Run IndexAnalysis.sql in this database first.', 16, 1)
+    RETURN
+END
+
+IF @AnalysisRunID IS NULL
+BEGIN
+    SELECT TOP (1)
+        @AnalysisRunID = AnalysisRunID,
+        @CaptureDate   = CONVERT(varchar(19), CaptureDate, 120)
+      FROM dbo.IndexAnalysis
+     WHERE DatabaseName = @TargetDatabase
+     ORDER BY CaptureDate DESC
+END
+ELSE
+BEGIN
+    SELECT TOP (1)
+        @CaptureDate = CONVERT(varchar(19), CaptureDate, 120),
+        @TargetDatabase = DatabaseName
+      FROM dbo.IndexAnalysis
+     WHERE AnalysisRunID = @AnalysisRunID
+END
+
+IF @AnalysisRunID IS NULL
+BEGIN
+    RAISERROR('No IndexAnalysis data found for database ''%s''.', 16, 1, @TargetDatabase)
+    RETURN
+END
+
+SET @DatabaseName = @TargetDatabase
 
 -- This layout is calibrated to exactly 120 printable characters.
 -- Keep the parameter so existing callers do not break, but force the report width.
@@ -86,7 +120,6 @@ SET @ProductLevel   = CAST(SERVERPROPERTY('ProductLevel') AS varchar(30))
 SET @Edition        = CAST(SERVERPROPERTY('Edition') AS varchar(64))
 SET @ServerName     = CAST(SERVERPROPERTY('MachineName') AS sysname)
                       + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
-SET @DatabaseName   = @TargetDatabase
 SET @ReportTime     = CONVERT(varchar(19), GETDATE(), 120)
 SET @RestartKnown   = CASE WHEN @MajorVersion >= 10 THEN 1 ELSE 0 END
 SET @Divider        = REPLICATE('-', @ReportWidth)
@@ -152,14 +185,6 @@ ELSE
 BEGIN
     SET @RestartTime = 'n/a (SQL 2005)'
 END
-
-EXEC dbo.AnalyzeIndexes
-    @TargetDatabase = @TargetDatabase,
-    @SchemaFilter   = @SchemaFilter,
-    @TableFilter    = @TableFilter,
-    @SortBy         = @SortBy,
-    @ReturnSummary  = 0,
-    @AnalysisRunID  = @AnalysisRunID OUTPUT
 
 INSERT INTO #IndexUsage
 (
@@ -256,6 +281,14 @@ SELECT
     ia.IsFiltered
   FROM dbo.IndexAnalysis AS ia
  WHERE ia.AnalysisRunID = @AnalysisRunID
+   AND ia.SchemaName LIKE @SchemaFilter
+   AND ia.TableName LIKE @TableFilter
+
+IF NOT EXISTS (SELECT 1 FROM #IndexUsage)
+BEGIN
+    RAISERROR('No IndexAnalysis rows matched AnalysisRunID %s with the requested filters.', 16, 1, @AnalysisRunID)
+    RETURN
+END
 
 SELECT
     @TotalIndexes      = COUNT(*),
@@ -283,7 +316,8 @@ SELECT @LineNo + 3,
             + '  |  ' + LEFT(@Edition, 24) + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 4,
-       LEFT(' Stats since restart: ' + @RestartTime
+       LEFT(' Captured: ' + ISNULL(@CaptureDate, 'unknown')
+            + '  |  Stats since restart: ' + @RestartTime
             + CASE WHEN @MajorVersion < 10 THEN '  (upgrade to SQL 2008+ for start time)' ELSE '' END
             + @BlankLine, @ReportWidth)
 UNION ALL
@@ -372,7 +406,7 @@ SELECT @LineNo + 2, LEFT(' USED=last seek/scan/lookup/update (MM-DD). R/W=read o
 UNION ALL
 SELECT @LineNo + 3, LEFT(' Note: usage stats reset at instance restart; missing rows mean no activity since restart.' + @BlankLine, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 4, LEFT(' Stored in IndexAnalysis run: ' + CAST(@AnalysisRunID AS varchar(36)) + @BlankLine, @ReportWidth)
+SELECT @LineNo + 4, LEFT(' IndexAnalysis run: ' + CAST(@AnalysisRunID AS varchar(36)) + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 5, LEFT(@HeaderRule, @ReportWidth)
 

@@ -14,6 +14,9 @@
 
   Note: create the trace folder on the SQL Server host before starting, for example:
     {InstanceDefaultDataPath}\PerformanceTraces\
+
+  To list candidate local paths:
+    EXEC dbo.ShowTraceWritablePaths
 */
 
 SET ANSI_NULLS ON

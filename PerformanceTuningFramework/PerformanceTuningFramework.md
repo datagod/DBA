@@ -77,9 +77,10 @@ Parameters:
 
 File: `ShowIndexUsageReport.sql`
 
-Stored procedure that calls `AnalyzeIndexes` to capture data, then returns a fixed-width, text-based report suitable for on-screen review.
+Stored procedure that reads captured data from `IndexAnalysis` and returns a fixed-width, text-based report suitable for on-screen review.
 
-- Delegates data capture to `AnalyzeIndexes`
+- Does not capture new data; run `AnalyzeIndexes` first
+- Defaults to the latest `AnalysisRunID` for the target database
 - Reports seeks, scans, lookups, updates, read/write ratio, size in MB, and last-used date per index
 - Includes a summary of unused indexes, write-heavy indexes, disabled indexes, and indexes not yet present in the usage cache since the last instance restart
 - Report layout is fixed at 120 characters wide
@@ -94,12 +95,14 @@ Deployment:
 -- 1. Run IndexAnalysis.sql in the tool database
 -- 2. Run AnalyzeIndexes.sql in the tool database
 -- 3. Run ShowIndexUsageReport.sql in the tool database
+EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase'
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase'
 ```
 
 Parameters:
 
-- `@TargetDatabase` — database to analyze (default: current database)
+- `@TargetDatabase` — database to report on (default: current database)
+- `@AnalysisRunID` — specific capture run (default: latest for the target database)
 - `@SchemaFilter` — schema name filter (default `%`)
 - `@TableFilter` — table name filter (default `%`)
 - `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
@@ -193,6 +196,24 @@ Parameters:
 - `@TraceFilePath` — optional base path for the trace file (default `{InstanceDefaultDataPath}\PerformanceTraces\`)
 - `@MaxFileSizeMB` — rollover size in MB (default `100`)
 - `@TraceControlID` — OUTPUT control row identifier
+
+### ShowTraceWritablePaths
+
+File: `ShowTraceWritablePaths.sql`
+
+Lists local server paths where SQL Server can typically write server-side trace files, including free space and whether the path fits the SQL Trace path length limit.
+
+```sql
+EXEC dbo.ShowTraceWritablePaths
+```
+
+Returns:
+
+- recommended default trace folder used by `StartPerformanceTrace`
+- instance data and log paths
+- folders already used by database files
+- folders currently used by active traces
+- SQL Server service account and an example `StartPerformanceTrace` command
 
 ### ShowRunningPerformanceTraces
 
