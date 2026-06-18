@@ -4,7 +4,7 @@
   ShowQueryStoreReport.sql
   Performance Tuning Framework
 
-  Deploy to the tool database, create QueryStoreAnalysis first, then execute:
+  Deploy to the tool database, then execute:
     EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase'
 
   Optional parameters:
@@ -33,8 +33,8 @@ AS
 -- Date Created: June 18, 2026
 -- Author:       Bill McEvoy
 -- Description:  Version-aware Query Store diagnostic report for a target database. Reads Query
---               Store catalog views from the target database, stores results in QueryStoreAnalysis,
---               and returns a fixed-width, screen-friendly text report.
+--               Store catalog views from the target database and returns a fixed-width,
+--               screen-friendly text report.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -61,8 +61,6 @@ DECLARE
     @TextWidth              tinyint,
     @LineNo                 int,
     @SortByUpper            varchar(10),
-    @AnalysisRunID          uniqueidentifier,
-    @CaptureDate            datetime,
     @Sql                    nvarchar(max),
     @ActualState            nvarchar(60),
     @DesiredState           nvarchar(60),
@@ -90,12 +88,6 @@ SET @TargetDatabaseId = DB_ID(@TargetDatabase)
 IF @TargetDatabaseId IS NULL
 BEGIN
     RAISERROR('Target database ''%s'' does not exist on this server.', 16, 1, @TargetDatabase)
-    RETURN
-END
-
-IF OBJECT_ID('dbo.QueryStoreAnalysis') IS NULL
-BEGIN
-    RAISERROR('Table dbo.QueryStoreAnalysis does not exist. Run QueryStoreAnalysis.sql in this database first.', 16, 1)
     RETURN
 END
 
@@ -141,8 +133,6 @@ SET @ReportTime     = CONVERT(varchar(19), GETDATE(), 120)
 SET @Divider        = REPLICATE('-', @ReportWidth)
 SET @HeaderRule     = REPLICATE('=', @ReportWidth)
 SET @BlankLine      = REPLICATE(' ', @ReportWidth)
-SET @AnalysisRunID  = NEWID()
-SET @CaptureDate    = GETDATE()
 
 SET @QueryIdWidth = 9
 SET @ExecWidth    = 8
@@ -160,7 +150,6 @@ CREATE TABLE #QueryStats
 (
     SortKey             bigint          NOT NULL,
     QueryID             bigint          NOT NULL,
-    QueryText           nvarchar(max)   NOT NULL,
     QueryTextShort      varchar(200)    NOT NULL,
     PlanCount           int             NOT NULL,
     IsForcedPlan        bit             NOT NULL,
@@ -280,7 +269,6 @@ BEGIN
     (
         SortKey,
         QueryID,
-        QueryText,
         QueryTextShort,
         PlanCount,
         IsForcedPlan,
@@ -301,7 +289,6 @@ BEGIN
                       ELSE AvgDurationUs
                   END,
         QueryID,
-        QueryText = query_sql_text,
         QueryTextShort = LEFT(
             REPLACE(REPLACE(REPLACE(query_sql_text, CHAR(13), '' ''), CHAR(10), '' ''), ''  '', '' ''),
             200),
@@ -356,54 +343,6 @@ BEGIN
      WHERE PlanCount > 1
 
     SET @CapturedQueries = (SELECT COUNT(*) FROM #QueryStats)
-
-    INSERT INTO dbo.QueryStoreAnalysis
-    (
-        AnalysisRunID,
-        CaptureDate,
-        ServerName,
-        DatabaseName,
-        ActualState,
-        DesiredState,
-        CurrentStorageSizeMB,
-        MaxStorageSizeMB,
-        QueryID,
-        QueryText,
-        PlanCount,
-        IsForcedPlan,
-        Executions,
-        AvgDurationUs,
-        AvgCpuUs,
-        AvgLogicalReads,
-        TotalDurationUs,
-        LastExecutionTime,
-        SortBy,
-        TopN,
-        MinExecutions
-    )
-    SELECT
-        @AnalysisRunID,
-        @CaptureDate,
-        @ServerName,
-        @TargetDatabase,
-        @ActualState,
-        @DesiredState,
-        @CurrentStorageSizeMB,
-        @MaxStorageSizeMB,
-        q.QueryID,
-        q.QueryText,
-        q.PlanCount,
-        q.IsForcedPlan,
-        q.Executions,
-        q.AvgDurationUs,
-        q.AvgCpuUs,
-        q.AvgLogicalReads,
-        q.TotalDurationUs,
-        q.LastExecutionTime,
-        @SortByUpper,
-        @TopN,
-        @MinExecutions
-    FROM #QueryStats AS q
 END
 ELSE
 BEGIN
@@ -561,11 +500,9 @@ BEGIN
     UNION ALL
     SELECT @LineNo + 2, LEFT(' Legend: AVGMS/CPUMS in milliseconds. PLN=plan count. *=forced plan in store.' + @BlankLine, @ReportWidth)
     UNION ALL
-    SELECT @LineNo + 3, LEFT(' Full query text and all captured queries are stored in QueryStoreAnalysis.' + @BlankLine, @ReportWidth)
+    SELECT @LineNo + 3, LEFT(' Note: Query Store must be READ_WRITE or READ_ONLY. Query text is truncated in this report.' + @BlankLine, @ReportWidth)
     UNION ALL
-    SELECT @LineNo + 4, LEFT(' Stored in QueryStoreAnalysis run: ' + CAST(@AnalysisRunID AS varchar(36)) + @BlankLine, @ReportWidth)
-    UNION ALL
-    SELECT @LineNo + 5, LEFT(@HeaderRule, @ReportWidth)
+    SELECT @LineNo + 4, LEFT(@HeaderRule, @ReportWidth)
 END
 
 SELECT ReportLine
