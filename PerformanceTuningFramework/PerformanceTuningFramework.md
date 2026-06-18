@@ -10,6 +10,23 @@ Procedures run from one tool database, read metadata from a target database pass
 
 ## Tables
 
+### QueryStoreAnalysis
+
+File: `QueryStoreAnalysis.sql`
+
+Persistent storage for Query Store diagnostic results. Deploy to the tool database before running `ShowQueryStoreReport`.
+
+- One row per captured query per execution
+- Grouped by `AnalysisRunID` and `CaptureDate` for each run
+- Stores Query Store state, query text, plan count, execution metrics, and run parameters
+- Indexed on `AnalysisRunID` and `(DatabaseName, CaptureDate)`
+
+Deployment:
+
+```sql
+-- Run QueryStoreAnalysis.sql in the tool database
+```
+
 ### IndexAnalysis
 
 File: `IndexAnalysis.sql`
@@ -84,3 +101,53 @@ SELECT SchemaName, TableName, IndexName, UserUpdates, SizeMB
 ```
 
 Note: usage statistics reset when the SQL Server instance restarts. Indexes with no row in `sys.dm_db_index_usage_stats` have had no recorded activity since the restart.
+
+### ShowQueryStoreReport
+
+File: `ShowQueryStoreReport.sql`
+
+Stored procedure that examines Query Store data on a target database, stores results in `QueryStoreAnalysis`, and returns a fixed-width, text-based report in the same style as `ShowIndexUsageReport`.
+
+- Requires SQL Server 2016 or later and compatibility level 130 or higher on the target database
+- Reads Query Store catalog views from the target database via three-part names
+- Reports configuration, summary metrics, and top queries by duration, CPU, reads, or executions
+- Inserts all captured queries meeting the minimum execution threshold into `QueryStoreAnalysis`
+- Report layout is fixed at 120 characters wide
+
+Deployment:
+
+```sql
+-- 1. Run QueryStoreAnalysis.sql in the tool database
+-- 2. Run ShowQueryStoreReport.sql in the tool database
+EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase'
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to analyze (default: current database)
+- `@TopN` — number of queries shown in the report detail (default `25`)
+- `@MinExecutions` — minimum executions required to capture a query (default `5`)
+- `@SortBy` — `DURATION`, `TOTAL`, `CPU`, `READS`, or `EXECUTIONS` (default `DURATION`)
+- `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
+
+Querying stored results:
+
+```sql
+-- Latest run for a database
+SELECT *
+  FROM dbo.QueryStoreAnalysis
+ WHERE DatabaseName = N'YourDatabase'
+   AND AnalysisRunID = (
+       SELECT TOP 1 AnalysisRunID
+         FROM dbo.QueryStoreAnalysis
+        WHERE DatabaseName = N'YourDatabase'
+        ORDER BY CaptureDate DESC)
+
+-- Slowest average duration from latest capture
+SELECT QueryID, Executions, AvgDurationUs, AvgCpuUs, QueryText
+  FROM dbo.QueryStoreAnalysis
+ WHERE DatabaseName = N'YourDatabase'
+ ORDER BY AvgDurationUs DESC
+```
+
+Note: Query Store must be in `READ_WRITE` or `READ_ONLY` state on the target database to return query data.
