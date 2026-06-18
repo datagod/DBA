@@ -6,9 +6,25 @@ SQL Server scripts and utilities for database performance analysis and tuning. D
 
 This framework lives in the `PerformanceTuningFramework` folder of the DBA repository. Each script is designed to be version-aware where possible and to produce output that is easy to read in SSMS or an Azure DevOps wiki.
 
-Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only.
+Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. Server-side performance traces are stored in `PerformanceTraceResults` when stopped.
 
 ## Tables
+
+### PerformanceTraceResults
+
+File: `PerformanceTraceResults.sql`
+
+Persistent storage for imported server-side trace events. Also creates `PerformanceTraceControl` to track running and completed traces.
+
+- `PerformanceTraceControl` stores trace identity, file path, status, filters, and import metadata
+- `PerformanceTraceResults` stores query text, reads, writes, duration, CPU, login, hostname, start time, end time, and related event data
+- Trace results are imported when `StopPerformanceTrace` is executed
+
+Deployment:
+
+```sql
+-- Run PerformanceTraceResults.sql in the tool database
+```
 
 ### IndexAnalysis
 
@@ -139,3 +155,78 @@ Parameters:
 - `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
 
 Note: Query Store must be in `READ_WRITE` or `READ_ONLY` state on the target database to return query data.
+
+### StartPerformanceTrace
+
+File: `StartPerformanceTrace.sql`
+
+Starts a server-side SQL Trace and records control metadata in `PerformanceTraceControl`. Trace data is written to a server-side `.trc` file and imported into `PerformanceTraceResults` when the trace is stopped.
+
+- Captures `RPC:Completed`, `SQL:BatchCompleted`, and `SP:StmtCompleted` events
+- Optional filters: database name, minimum reads, minimum writes, minimum duration, login name, hostname
+- NULL filter parameters mean no filter is applied for that column
+- When a filter is populated, rows with NULL values in that column are excluded during import
+
+Deployment:
+
+```sql
+-- Requires ALTER TRACE permission
+-- Create {InstanceDefaultDataPath}\PerformanceTraces\ on the SQL Server host first
+DECLARE @TraceControlID int
+EXEC dbo.StartPerformanceTrace
+    @TraceName = N'MyTrace',
+    @DatabaseName = N'YourDatabase',
+    @MinReads = 1000,
+    @MinDuration = 500000,
+    @TraceControlID = @TraceControlID OUTPUT
+```
+
+Parameters:
+
+- `@TraceName` — trace name (default auto-generated)
+- `@DatabaseName` — database filter (default none)
+- `@MinReads` — minimum reads filter (default none)
+- `@MinWrites` — minimum writes filter (default none)
+- `@MinDuration` — minimum duration in microseconds (default none)
+- `@LoginName` — login filter, supports LIKE patterns (default none)
+- `@HostName` — hostname filter, supports LIKE patterns (default none)
+- `@TraceFilePath` — optional base path for the trace file (default `{InstanceDefaultDataPath}\PerformanceTraces\`)
+- `@MaxFileSizeMB` — rollover size in MB (default `100`)
+- `@TraceControlID` — OUTPUT control row identifier
+
+### ShowRunningPerformanceTraces
+
+File: `ShowRunningPerformanceTraces.sql`
+
+Lists performance traces started by `StartPerformanceTrace` that are still marked running in `PerformanceTraceControl`, including current server trace status.
+
+```sql
+EXEC dbo.ShowRunningPerformanceTraces
+```
+
+### StopPerformanceTrace
+
+File: `StopPerformanceTrace.sql`
+
+Stops a running trace, imports the trace file into `PerformanceTraceResults`, and updates `PerformanceTraceControl`.
+
+```sql
+EXEC dbo.StopPerformanceTrace @TraceControlID = 1
+-- or
+EXEC dbo.StopPerformanceTrace @TraceName = N'MyTrace'
+```
+
+Parameters:
+
+- `@TraceControlID` — preferred identifier from `ShowRunningPerformanceTraces`
+- `@TraceID` — SQL Server trace ID
+- `@TraceName` — trace name
+
+Querying stored trace results:
+
+```sql
+SELECT DatabaseName, Duration, Reads, Writes, LoginName, HostName, StartTime, QueryText
+  FROM dbo.PerformanceTraceResults
+ WHERE TraceControlID = 1
+ ORDER BY Duration DESC
+```
