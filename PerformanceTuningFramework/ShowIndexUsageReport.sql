@@ -32,9 +32,8 @@ AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: June 18, 2026
 -- Author:       Bill McEvoy
--- Description:  Version-aware index usage report. Reads index metadata from a target database,
---               joins instance-wide sys.dm_db_index_usage_stats, stores results in IndexAnalysis,
---               and returns a fixed-width, screen-friendly text report.
+-- Description:  Version-aware index usage report. Calls AnalyzeIndexes to capture data into
+--               IndexAnalysis, then returns a fixed-width, screen-friendly text report.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -45,7 +44,6 @@ DECLARE
     @Edition             varchar(64),
     @ServerName          sysname,
     @DatabaseName        sysname,
-    @TargetDatabaseId    int,
     @ReportTime          varchar(19),
     @RestartTime         varchar(19),
     @RestartKnown        bit,
@@ -66,26 +64,10 @@ DECLARE
     @NeverSampled        int,
     @LineNo              int,
     @SortByUpper         varchar(10),
-    @AnalysisRunID       uniqueidentifier,
-    @CaptureDate         datetime,
-    @Sql                 nvarchar(max)
+    @AnalysisRunID       uniqueidentifier
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
-
-SET @TargetDatabaseId = DB_ID(@TargetDatabase)
-
-IF @TargetDatabaseId IS NULL
-BEGIN
-    RAISERROR('Target database ''%s'' does not exist on this server.', 16, 1, @TargetDatabase)
-    RETURN
-END
-
-IF OBJECT_ID('dbo.IndexAnalysis') IS NULL
-BEGIN
-    RAISERROR('Table dbo.IndexAnalysis does not exist. Run IndexAnalysis.sql in this database first.', 16, 1)
-    RETURN
-END
 
 -- This layout is calibrated to exactly 120 printable characters.
 -- Keep the parameter so existing callers do not break, but force the report width.
@@ -110,8 +92,6 @@ SET @RestartKnown   = CASE WHEN @MajorVersion >= 10 THEN 1 ELSE 0 END
 SET @Divider        = REPLICATE('-', @ReportWidth)
 SET @HeaderRule     = REPLICATE('=', @ReportWidth)
 SET @BlankLine      = REPLICATE(' ', @ReportWidth)
-SET @AnalysisRunID  = NEWID()
-SET @CaptureDate    = GETDATE()
 
 -- Column widths total 111 characters; 9 one-character separators make 120.
 SET @ObjectWidth = 34
@@ -173,18 +153,14 @@ BEGIN
     SET @RestartTime = 'n/a (SQL 2005)'
 END
 
-SET @Sql = N'
-;WITH IndexSizes AS
-(
-    SELECT
-        p.object_id,
-        p.index_id,
-        SizeMB = SUM(a.total_pages) * 8.0 / 1024.0
-    FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.partitions AS p
-    INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.allocation_units AS a
-        ON p.partition_id = a.container_id
-    GROUP BY p.object_id, p.index_id
-)
+EXEC dbo.AnalyzeIndexes
+    @TargetDatabase = @TargetDatabase,
+    @SchemaFilter   = @SchemaFilter,
+    @TableFilter    = @TableFilter,
+    @SortBy         = @SortBy,
+    @ReturnSummary  = 0,
+    @AnalysisRunID  = @AnalysisRunID OUTPUT
+
 INSERT INTO #IndexUsage
 (
     SortKey,
@@ -215,169 +191,71 @@ INSERT INTO #IndexUsage
 )
 SELECT
     SortKey = CASE @SortByUpper
-                  WHEN ''WRITES''   THEN ISNULL(us.user_updates, 0)
-                  WHEN ''SIZE''     THEN CAST(ISNULL(sz.SizeMB, 0) * 10 AS bigint)
-                  WHEN ''OBJECT''   THEN CHECKSUM(s.name, o.name, ISNULL(i.name, ''''))
-                  WHEN ''LAST_USE'' THEN DATEDIFF(minute, ''2000-01-01'',
-                                      COALESCE(us.last_user_seek, us.last_user_scan,
-                                               us.last_user_lookup, us.last_user_update, ''2000-01-01''))
-                  ELSE ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0)
+                  WHEN 'WRITES'   THEN ia.UserUpdates
+                  WHEN 'SIZE'     THEN CAST(ia.SizeMB * 10 AS bigint)
+                  WHEN 'OBJECT'   THEN CHECKSUM(ia.SchemaName, ia.TableName, ISNULL(ia.IndexName, ''))
+                  WHEN 'LAST_USE' THEN DATEDIFF(minute, '2000-01-01',
+                                      COALESCE(ia.LastUserSeek, ia.LastUserScan,
+                                               ia.LastUserLookup, ia.LastUserUpdate, '2000-01-01'))
+                  ELSE ia.TotalReads
               END,
-    SchemaName = s.name,
-    TableName = o.name,
-    ObjectName = s.name + ''.'' + o.name,
-    ObjectID = o.object_id,
-    IndexID = i.index_id,
+    ia.SchemaName,
+    ia.TableName,
+    ObjectName = ia.SchemaName + '.' + ia.TableName,
+    ia.ObjectID,
+    ia.IndexID,
     IndexName = CASE
-                    WHEN i.index_id = 0 THEN ''[HEAP]''
-                    WHEN i.name IS NULL THEN ''[unnamed]''
-                    ELSE i.name
+                    WHEN ia.IndexID = 0 THEN '[HEAP]'
+                    WHEN ia.IndexName IS NULL THEN '[unnamed]'
+                    ELSE ia.IndexName
                 END,
-    IndexTypeDesc = CASE
-                        WHEN i.index_id = 0 THEN ''HEAP''
-                        ELSE i.type_desc
-                    END,
+    ia.IndexTypeDesc,
     TypeAbbr = CASE
-                   WHEN i.index_id = 0 THEN ''HP ''
-                   WHEN i.is_disabled = 1 THEN
-                       CASE i.type_desc
-                           WHEN ''CLUSTERED'' THEN ''CL*''
-                           WHEN ''NONCLUSTERED'' THEN ''NC*''
-                           WHEN ''XML'' THEN ''XML''
-                           ELSE LEFT(REPLACE(i.type_desc, '' '', ''''), 3)
+                   WHEN ia.IndexID = 0 THEN 'HP '
+                   WHEN ia.IsDisabled = 1 THEN
+                       CASE ia.IndexTypeDesc
+                           WHEN 'CLUSTERED' THEN 'CL*'
+                           WHEN 'NONCLUSTERED' THEN 'NC*'
+                           WHEN 'XML' THEN 'XML'
+                           ELSE LEFT(REPLACE(ia.IndexTypeDesc, ' ', ''), 3)
                        END
-                   WHEN i.type_desc = ''CLUSTERED'' THEN ''CL ''
-                   WHEN i.type_desc = ''NONCLUSTERED'' THEN ''NC ''
-                   WHEN i.type_desc = ''XML'' THEN ''XML''
-                   WHEN @MajorVersion >= 11 AND i.type_desc LIKE ''%COLUMNSTORE%'' THEN
-                       CASE WHEN i.type_desc LIKE ''CLUSTERED%'' THEN ''CC '' ELSE ''CS '' END
-                   ELSE LEFT(REPLACE(i.type_desc, '' '', ''''), 3)
+                   WHEN ia.IndexTypeDesc = 'CLUSTERED' THEN 'CL '
+                   WHEN ia.IndexTypeDesc = 'NONCLUSTERED' THEN 'NC '
+                   WHEN ia.IndexTypeDesc = 'XML' THEN 'XML'
+                   WHEN @MajorVersion >= 11 AND ia.IndexTypeDesc LIKE '%COLUMNSTORE%' THEN
+                       CASE WHEN ia.IndexTypeDesc LIKE 'CLUSTERED%' THEN 'CC ' ELSE 'CS ' END
+                   ELSE LEFT(REPLACE(ia.IndexTypeDesc, ' ', ''), 3)
                END,
-    UserSeeks   = ISNULL(us.user_seeks, 0),
-    UserScans   = ISNULL(us.user_scans, 0),
-    UserLookups = ISNULL(us.user_lookups, 0),
-    UserUpdates = ISNULL(us.user_updates, 0),
-    TotalReads  = ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0),
+    ia.UserSeeks,
+    ia.UserScans,
+    ia.UserLookups,
+    ia.UserUpdates,
+    ia.TotalReads,
     ReadWriteRatio = CASE
-                         WHEN ISNULL(us.user_updates, 0) = 0 AND
-                              (ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0)) = 0
-                             THEN ''n/a''
-                         WHEN ISNULL(us.user_updates, 0) = 0 THEN ''inf''
-                         ELSE CAST(
-                              (ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0))
-                              / NULLIF(us.user_updates, 0) AS varchar(8))
+                         WHEN ia.UserUpdates = 0 AND ia.TotalReads = 0 THEN 'n/a'
+                         WHEN ia.UserUpdates = 0 THEN 'inf'
+                         ELSE CAST(ia.ReadWriteRatio AS varchar(8))
                      END,
-    ReadWriteNumeric = CASE
-                           WHEN ISNULL(us.user_updates, 0) = 0 THEN NULL
-                           ELSE (ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0))
-                                * 1.0 / us.user_updates
-                       END,
-    SizeMB = ISNULL(sz.SizeMB, 0),
-    LastUserSeek = us.last_user_seek,
-    LastUserScan = us.last_user_scan,
-    LastUserLookup = us.last_user_lookup,
-    LastUserUpdate = us.last_user_update,
+    ia.ReadWriteRatio,
+    ia.SizeMB,
+    ia.LastUserSeek,
+    ia.LastUserScan,
+    ia.LastUserLookup,
+    ia.LastUserUpdate,
     LastUseDate = CASE
-                      WHEN COALESCE(us.last_user_seek, us.last_user_scan, us.last_user_lookup, us.last_user_update) IS NULL
-                          THEN ''     ''
-                      ELSE RIGHT(''0'' + CAST(MONTH(
-                               COALESCE(us.last_user_seek, us.last_user_scan, us.last_user_lookup, us.last_user_update)) AS varchar(2)), 2)
-                           + ''-''
-                           + RIGHT(''0'' + CAST(DAY(
-                               COALESCE(us.last_user_seek, us.last_user_scan, us.last_user_lookup, us.last_user_update)) AS varchar(2)), 2)
+                      WHEN COALESCE(ia.LastUserSeek, ia.LastUserScan, ia.LastUserLookup, ia.LastUserUpdate) IS NULL
+                          THEN '     '
+                      ELSE RIGHT('0' + CAST(MONTH(
+                               COALESCE(ia.LastUserSeek, ia.LastUserScan, ia.LastUserLookup, ia.LastUserUpdate)) AS varchar(2)), 2)
+                           + '-'
+                           + RIGHT('0' + CAST(DAY(
+                               COALESCE(ia.LastUserSeek, ia.LastUserScan, ia.LastUserLookup, ia.LastUserUpdate)) AS varchar(2)), 2)
                   END,
-    IsDisabled = ISNULL(i.is_disabled, 0),
-    HasUsageStats = CASE WHEN us.database_id IS NULL THEN 0 ELSE 1 END,
-    IsFiltered = CASE WHEN @MajorVersion >= 10 AND ISNULL(i.has_filter, 0) = 1 THEN 1 ELSE 0 END
-FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.objects AS o
-INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.schemas AS s
-    ON s.schema_id = o.schema_id
-INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.indexes AS i
-    ON i.object_id = o.object_id
-LEFT JOIN sys.dm_db_index_usage_stats AS us
-    ON us.database_id = @TargetDatabaseId
-   AND us.object_id = i.object_id
-   AND us.index_id = i.index_id
-LEFT JOIN IndexSizes AS sz
-    ON sz.object_id = i.object_id
-   AND sz.index_id = i.index_id
-WHERE o.type = ''U''
-  AND s.name LIKE @SchemaFilter
-  AND o.name LIKE @TableFilter
-  AND i.index_id >= 0'
-
-EXEC sys.sp_executesql
-    @Sql,
-    N'@TargetDatabaseId int,
-      @SchemaFilter sysname,
-      @TableFilter sysname,
-      @MajorVersion tinyint,
-      @SortByUpper varchar(10)',
-    @TargetDatabaseId = @TargetDatabaseId,
-    @SchemaFilter = @SchemaFilter,
-    @TableFilter = @TableFilter,
-    @MajorVersion = @MajorVersion,
-    @SortByUpper = @SortByUpper
-
-INSERT INTO dbo.IndexAnalysis
-(
-    AnalysisRunID,
-    CaptureDate,
-    ServerName,
-    DatabaseName,
-    SchemaName,
-    TableName,
-    IndexName,
-    ObjectID,
-    IndexID,
-    IndexTypeDesc,
-    UserSeeks,
-    UserScans,
-    UserLookups,
-    UserUpdates,
-    TotalReads,
-    ReadWriteRatio,
-    SizeMB,
-    LastUserSeek,
-    LastUserScan,
-    LastUserLookup,
-    LastUserUpdate,
-    IsDisabled,
-    HasUsageStats,
-    IsFiltered,
-    FilterSchema,
-    FilterTable,
-    SortBy
-)
-SELECT
-    @AnalysisRunID,
-    @CaptureDate,
-    @ServerName,
-    @TargetDatabase,
-    u.SchemaName,
-    u.TableName,
-    CASE WHEN u.IndexID = 0 OR u.IndexName IN ('[HEAP]', '[unnamed]') THEN NULL ELSE u.IndexName END,
-    u.ObjectID,
-    u.IndexID,
-    u.IndexTypeDesc,
-    u.UserSeeks,
-    u.UserScans,
-    u.UserLookups,
-    u.UserUpdates,
-    u.TotalReads,
-    u.ReadWriteNumeric,
-    u.SizeMB,
-    u.LastUserSeek,
-    u.LastUserScan,
-    u.LastUserLookup,
-    u.LastUserUpdate,
-    u.IsDisabled,
-    u.HasUsageStats,
-    u.IsFiltered,
-    @SchemaFilter,
-    @TableFilter,
-    @SortByUpper
-FROM #IndexUsage AS u
+    ia.IsDisabled,
+    ia.HasUsageStats,
+    ia.IsFiltered
+  FROM dbo.IndexAnalysis AS ia
+ WHERE ia.AnalysisRunID = @AnalysisRunID
 
 SELECT
     @TotalIndexes      = COUNT(*),

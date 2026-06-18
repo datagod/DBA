@@ -14,7 +14,7 @@ Procedures run from one tool database and read metadata from a target database p
 
 File: `IndexAnalysis.sql`
 
-Persistent storage for index usage analysis results. Deploy to the tool database before running `ShowIndexUsageReport`.
+Persistent storage for index usage analysis results. Deploy to the tool database before running `AnalyzeIndexes` or `ShowIndexUsageReport`.
 
 - One row per index per execution
 - Grouped by `AnalysisRunID` and `CaptureDate` for each run
@@ -29,15 +29,41 @@ Deployment:
 
 ## Scripts
 
+### AnalyzeIndexes
+
+File: `AnalyzeIndexes.sql`
+
+Stored procedure that captures index usage statistics from a target database and writes the results to `IndexAnalysis`.
+
+- Reads catalog metadata from the target database via three-part names
+- Joins instance-wide `sys.dm_db_index_usage_stats` filtered to the target database
+- Inserts one row per index into `IndexAnalysis`
+- Returns a single-row summary with `AnalysisRunID`, counts, and run parameters
+
+Deployment:
+
+```sql
+-- 1. Run IndexAnalysis.sql in the tool database
+-- 2. Run AnalyzeIndexes.sql in the tool database
+DECLARE @RunID uniqueidentifier
+EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase', @AnalysisRunID = @RunID OUTPUT
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to analyze (default: current database)
+- `@SchemaFilter` — schema name filter (default `%`)
+- `@TableFilter` — table name filter (default `%`)
+- `@SortBy` — `READS`, `WRITES`, `SIZE`, `OBJECT`, or `LAST_USE` (default `READS`)
+- `@AnalysisRunID` — OUTPUT unique identifier for the capture run
+
 ### ShowIndexUsageReport
 
 File: `ShowIndexUsageReport.sql`
 
-Stored procedure that examines index usage statistics on a target database, stores results in `IndexAnalysis`, and returns a fixed-width, text-based report suitable for on-screen review.
+Stored procedure that calls `AnalyzeIndexes` to capture data, then returns a fixed-width, text-based report suitable for on-screen review.
 
-- Reads catalog metadata from the target database via three-part names
-- Joins instance-wide `sys.dm_db_index_usage_stats` filtered to the target database
-- Inserts one row per index into `IndexAnalysis` on each execution
+- Delegates data capture to `AnalyzeIndexes`
 - Reports seeks, scans, lookups, updates, read/write ratio, size in MB, and last-used date per index
 - Includes a summary of unused indexes, write-heavy indexes, disabled indexes, and indexes not yet present in the usage cache since the last instance restart
 - Report layout is fixed at 120 characters wide
@@ -50,7 +76,8 @@ Deployment:
 
 ```sql
 -- 1. Run IndexAnalysis.sql in the tool database
--- 2. Run ShowIndexUsageReport.sql in the tool database
+-- 2. Run AnalyzeIndexes.sql in the tool database
+-- 3. Run ShowIndexUsageReport.sql in the tool database
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase'
 ```
 

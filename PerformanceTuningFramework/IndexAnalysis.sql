@@ -3,7 +3,7 @@
   Performance Tuning Framework
 
   Deploy to the tool database from which Performance Tuning Framework
-  procedures are executed. Results from ShowIndexUsageReport are stored here.
+  procedures are executed. Results from AnalyzeIndexes are stored here.
 */
 
 SET ANSI_NULLS ON
