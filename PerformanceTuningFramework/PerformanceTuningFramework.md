@@ -215,15 +215,24 @@ Returns:
 - folders currently used by active traces
 - SQL Server service account and an example `StartPerformanceTrace` command
 
-### ShowRunningPerformanceTraces
+### ShowTraceInfo
 
-File: `ShowRunningPerformanceTraces.sql`
+File: `ShowTraceInfo.sql`
 
-Lists performance traces started by `StartPerformanceTrace` that are still marked running in `PerformanceTraceControl`, including current server trace status.
+Reports what is going on with performance traces by querying `PerformanceTraceControl` and `PerformanceTraceResults`, correlated with active server-side traces.
 
 ```sql
-EXEC dbo.ShowRunningPerformanceTraces
+EXEC dbo.ShowTraceInfo
+EXEC dbo.ShowTraceInfo @Status = 'Running'
+EXEC dbo.ShowTraceInfo @TraceControlID = 1
 ```
+
+Returns:
+
+- summary counts for running, stopped, and error traces plus total imported events
+- per-trace control metadata, server trace status, filters, and a plain-language `TraceStateSummary`
+- imported event statistics such as event count, max/avg duration, max reads/writes, and first/last event times
+- ready-to-run `StopPerformanceTrace` command for each trace
 
 ### StopPerformanceTrace
 
@@ -239,7 +248,7 @@ EXEC dbo.StopPerformanceTrace @TraceName = N'MyTrace'
 
 Parameters:
 
-- `@TraceControlID` — preferred identifier from `ShowRunningPerformanceTraces`
+- `@TraceControlID` — preferred identifier from `ShowTraceInfo`
 - `@TraceID` — SQL Server trace ID
 - `@TraceName` — trace name
 

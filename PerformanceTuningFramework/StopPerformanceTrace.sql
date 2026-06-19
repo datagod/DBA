@@ -7,7 +7,7 @@
   Deploy to the tool database, then execute:
     EXEC dbo.StopPerformanceTrace @TraceControlID = 1
 
-  Identify the trace with ShowRunningPerformanceTraces.
+  Identify the trace with ShowTraceInfo.
 */
 
 SET ANSI_NULLS ON
