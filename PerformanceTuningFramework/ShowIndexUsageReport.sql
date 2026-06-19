@@ -1,5 +1,3 @@
-
-
 /*
   ShowIndexUsageReport.sql
   Performance Tuning Framework
@@ -154,7 +152,7 @@ CREATE TABLE #IndexUsage
     UserLookups      bigint          NOT NULL,
     UserUpdates      bigint          NOT NULL,
     TotalReads       bigint          NOT NULL,
-    ReadWriteRatio   varchar(8)      NOT NULL,
+    ReadWriteRatio   varchar(32)     NOT NULL,
     ReadWriteNumeric decimal(18, 4)  NULL,
     SizeMB           decimal(12, 1)  NOT NULL,
     LastUserSeek     datetime        NULL,
@@ -259,7 +257,7 @@ SELECT
     ReadWriteRatio = CASE
                          WHEN ia.UserUpdates = 0 AND ia.TotalReads = 0 THEN 'n/a'
                          WHEN ia.UserUpdates = 0 THEN 'inf'
-                         ELSE CAST(ia.ReadWriteRatio AS varchar(8))
+                         ELSE CONVERT(varchar(32), ia.ReadWriteRatio)
                      END,
     ia.ReadWriteRatio,
     ia.SizeMB,
@@ -286,7 +284,11 @@ SELECT
 
 IF NOT EXISTS (SELECT 1 FROM #IndexUsage)
 BEGIN
-    RAISERROR('No IndexAnalysis rows matched AnalysisRunID %s with the requested filters.', 16, 1, @AnalysisRunID)
+    DECLARE @AnalysisRunIDText varchar(36)
+
+    SET @AnalysisRunIDText = CONVERT(varchar(36), @AnalysisRunID)
+
+    RAISERROR('No IndexAnalysis rows matched AnalysisRunID %s with the requested filters.', 16, 1, @AnalysisRunIDText)
     RETURN
 END
 
