@@ -6,7 +6,7 @@ SQL Server scripts and utilities for database performance analysis and tuning. D
 
 This framework lives in the `PerformanceTuningFramework` folder of the DBA repository. Each script is designed to be version-aware where possible and to produce output that is easy to read in SSMS or an Azure DevOps wiki.
 
-Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. Server-side performance traces are stored in `PerformanceTraceResults` when stopped.
+Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped.
 
 ## Tables
 
@@ -158,6 +158,46 @@ Parameters:
 - `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
 
 Note: Query Store must be in `READ_WRITE` or `READ_ONLY` state on the target database to return query data.
+
+### ShowQueryStoreWorkloadReport
+
+File: `ShowQueryStoreWorkloadReport.sql`
+
+Stored procedure that scans Query Store on every eligible database on the server and returns a fixed-width, text-based workload report. Classifies recent activity into stored procedures, SQL Agent jobs, maintenance tasks, application queries, and related workload types. Does not persist results to a table.
+
+- Requires SQL Server 2016 or later
+- Scans online, read/write databases where Query Store is enabled and readable
+- Filters activity by Query Store `last_execution_time` over the last X days
+- Groups stored procedures by `object_id` and ad hoc queries by `query_hash`
+- Report layout is fixed at 120 characters wide
+
+Deployment:
+
+```sql
+-- Run ShowQueryStoreWorkloadReport.sql in the tool database
+EXEC dbo.ShowQueryStoreWorkloadReport @DaysBack = 7
+```
+
+Parameters:
+
+- `@DaysBack` — lookback window in days (default `7`)
+- `@MinExecutions` — minimum executions in the window to include a workload (default `1`)
+- `@DatabaseFilter` — database name filter, supports LIKE patterns (default `%`)
+- `@IncludeSystemDatabases` — include `master`, `model`, `msdb`, and `tempdb` (default `0`)
+- `@TopN` — number of workload rows in the detail section (default `100`)
+- `@SortBy` — `EXECUTIONS`, `LAST_EXEC`, `DURATION`, or `DATABASE` (default `EXECUTIONS`)
+- `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
+
+Workload types reported:
+
+- Stored Procedure, Function, Trigger, View
+- Procedure Call (adhoc `EXEC`)
+- SQL Agent / Job
+- Maintenance
+- DDL / Admin
+- Application Query
+
+Note: Query Store does not store `program_name`, so SQL Agent jobs are inferred from query text patterns rather than from the calling application or job name.
 
 ### StartPerformanceTrace
 
