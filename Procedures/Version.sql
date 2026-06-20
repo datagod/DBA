@@ -53,9 +53,8 @@ DECLARE
     @Line               varchar(200),
     @VersionKey         varchar(20)
 
--- This layout is calibrated to exactly 120 printable characters.
--- Keep the parameter so existing callers do not break, but force the report width.
-SET @ReportWidth = 120
+
+
 SET @ProductVersion     = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
 SET @ProductLevel       = CAST(SERVERPROPERTY('ProductLevel') AS varchar(30))
 SET @ProductUpdateLevel = CAST(ISNULL(SERVERPROPERTY('ProductUpdateLevel'), '') AS varchar(30))
@@ -71,8 +70,8 @@ SET @BlankLine          = REPLICATE(' ', @ReportWidth)
 -- Column widths total 116 characters; single-space separators make 120.
 SET @YearWidth      = 6
 SET @VersionWidth   = 8
-SET @MarketingWidth = 70
-SET @CodeNameWidth  = 20
+SET @MarketingWidth = 20
+SET @CodeNameWidth  = 15
 SET @StatusWidth    = 12
 
 SET @MajorVersion = CONVERT(int,
@@ -196,11 +195,11 @@ SELECT @LineNo + 1, LEFT('= SQL SERVER VERSION REPORT =' + @BlankLine, @ReportWi
 UNION ALL
 SELECT @LineNo + 2, LEFT(@HeaderRule, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 3, LEFT(' Server: ' + @ServerName + '  |  ' + @ReportTime + @BlankLine, @ReportWidth)
+SELECT @LineNo + 3, LEFT('Server: ' + @ServerName + '  |  ' + @ReportTime + @BlankLine, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 4, LEFT(@Divider, @ReportWidth)
+SELECT @LineNo + 4, @BlankLine
 UNION ALL
-SELECT @LineNo + 5, LEFT(' CURRENT INSTANCE' + @BlankLine, @ReportWidth)
+SELECT @LineNo + 5, LEFT('CURRENT INSTANCE' + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 6, LEFT(@Divider, @ReportWidth)
 
@@ -286,3 +285,6 @@ IF OBJECT_ID('dbo.Version') IS NOT NULL
 ELSE
     PRINT 'Procedure Version NOT created.'
 GO
+
+
+exec Version
