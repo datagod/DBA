@@ -510,3 +510,7 @@ SELECT ReportLine
  ORDER BY [LineNo]
 
 GO
+
+
+exec ShowQueryStoreReport @TargetDatabase = 'Nova'
+
