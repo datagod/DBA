@@ -44,10 +44,17 @@ DECLARE
     @Divider            varchar(120),
     @HeaderRule         varchar(120),
     @BlankLine          varchar(120),
+    @YearWidth          tinyint,
+    @VersionWidth       tinyint,
+    @MarketingWidth     tinyint,
+    @CodeNameWidth      tinyint,
+    @StatusWidth        tinyint,
     @LineNo             int,
     @Line               varchar(200),
     @VersionKey         varchar(20)
 
+-- This layout is calibrated to exactly 120 printable characters.
+-- Keep the parameter so existing callers do not break, but force the report width.
 SET @ReportWidth = 120
 SET @ProductVersion     = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
 SET @ProductLevel       = CAST(SERVERPROPERTY('ProductLevel') AS varchar(30))
@@ -60,6 +67,13 @@ SET @ReportTime         = CONVERT(varchar(19), GETDATE(), 120)
 SET @Divider            = REPLICATE('-', @ReportWidth)
 SET @HeaderRule         = REPLICATE('=', @ReportWidth)
 SET @BlankLine          = REPLICATE(' ', @ReportWidth)
+
+-- Column widths total 116 characters; single-space separators make 120.
+SET @YearWidth      = 6
+SET @VersionWidth   = 8
+SET @MarketingWidth = 70
+SET @CodeNameWidth  = 20
+SET @StatusWidth    = 12
 
 SET @MajorVersion = CONVERT(int,
     LEFT(@ProductVersion, NULLIF(CHARINDEX('.', @ProductVersion), 0) - 1))
@@ -230,11 +244,11 @@ VALUES
     (@LineNo + 1, LEFT(' VERSION HISTORY (1989 - 2026)' + @BlankLine, @ReportWidth)),
     (@LineNo + 2, LEFT(@Divider, @ReportWidth)),
     (@LineNo + 3, LEFT(
-          LEFT('YEAR', 6)
-        + ' ' + LEFT('VERSION', 8)
-        + ' ' + LEFT('MARKETING NAME', 34)
-        + ' ' + LEFT('CODE NAME', 14)
-        + ' ' + LEFT('STATUS', 10),
+          RIGHT('YEAR' + @BlankLine, @YearWidth)
+        + ' ' + LEFT('VERSION' + @BlankLine, @VersionWidth)
+        + ' ' + LEFT('MARKETING NAME' + @BlankLine, @MarketingWidth)
+        + ' ' + LEFT('CODE NAME' + @BlankLine, @CodeNameWidth)
+        + ' ' + LEFT('STATUS' + @BlankLine, @StatusWidth),
         @ReportWidth)),
     (@LineNo + 4, LEFT(@Divider, @ReportWidth))
 
@@ -244,11 +258,11 @@ INSERT INTO #Report ([LineNo], ReportLine)
 SELECT
     @LineNo + ROW_NUMBER() OVER (ORDER BY v.SortOrder) - 1,
     LEFT(
-          RIGHT(REPLICATE(' ', 6) + CAST(v.ReleaseYear AS varchar(6)), 6)
-        + ' ' + LEFT(v.NumericVersion + @BlankLine, 8)
-        + ' ' + LEFT(v.MarketingName + @BlankLine, 34)
-        + ' ' + LEFT(ISNULL(v.CodeName, '') + @BlankLine, 14)
-        + ' ' + LEFT(CASE WHEN v.IsCurrent = 1 THEN '<<< CURRENT' ELSE '' END + @BlankLine, 10),
+          RIGHT(REPLICATE(' ', @YearWidth) + CAST(v.ReleaseYear AS varchar(6)), @YearWidth)
+        + ' ' + LEFT(v.NumericVersion + @BlankLine, @VersionWidth)
+        + ' ' + LEFT(v.MarketingName + @BlankLine, @MarketingWidth)
+        + ' ' + LEFT(ISNULL(v.CodeName, '') + @BlankLine, @CodeNameWidth)
+        + ' ' + LEFT(CASE WHEN v.IsCurrent = 1 THEN '<<< CURRENT' ELSE '' END + @BlankLine, @StatusWidth),
         @ReportWidth)
   FROM #VersionHistory AS v
 
@@ -272,5 +286,3 @@ IF OBJECT_ID('dbo.Version') IS NOT NULL
 ELSE
     PRINT 'Procedure Version NOT created.'
 GO
-
-exec Version
