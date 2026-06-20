@@ -1,4 +1,4 @@
-USE dba
+
 GO
 
 /*
@@ -568,7 +568,10 @@ SELECT ReportLine
  ORDER BY [LineNo]
 
 IF @WaitIfBlocked = 1 AND @BlockedSessions > 0 AND @WaitSeconds > 0
-    WAITFOR DELAY CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
+BEGIN
+   declare @Delay varchar(8) = CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
+   WAITFOR DELAY @Delay
+END
 
 GO
 
