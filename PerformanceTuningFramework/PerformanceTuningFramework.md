@@ -169,7 +169,7 @@ Stored procedure that scans Query Store on every eligible database on the server
 - Scans online, read/write databases where Query Store is enabled and readable
 - Filters activity by Query Store `last_execution_time` over the last X days
 - Groups stored procedures by `object_id` and ad hoc queries by `query_hash`
-- Report layout is fixed at 120 characters wide
+- Report layout width is controlled by `@ReportWidth` (default 120, range 80-200)
 
 Deployment:
 
@@ -186,7 +186,7 @@ Parameters:
 - `@IncludeSystemDatabases` — include `master`, `model`, `msdb`, and `tempdb` (default `0`)
 - `@TopN` — number of workload rows in the detail section (default `100`)
 - `@SortBy` — `EXECUTIONS`, `LAST_EXEC`, `DURATION`, or `DATABASE` (default `EXECUTIONS`)
-- `@ReportWidth` — kept for backward compatibility; layout is fixed at 120 characters
+- `@ReportWidth` — report line width in characters (default `120`, range `80`-`200`)
 
 Workload types reported:
 

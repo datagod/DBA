@@ -12,7 +12,7 @@
     @IncludeSystemDatabases - include master, model, msdb, tempdb (default 0)
     @TopN                   - number of workload rows in the detail section (default 100)
     @SortBy                 - EXECUTIONS | LAST_EXEC | DURATION | DATABASE
-    @ReportWidth            - kept for backward compatibility; report layout is fixed at 120 characters
+    @ReportWidth            - report line width in characters (default 120, range 80-200)
 */
 
 SET ANSI_NULLS ON
@@ -37,7 +37,7 @@ AS
 -- Description:  Server-wide Query Store workload report. Scans each database with Query Store
 --               enabled, classifies recent activity into stored procedures, SQL Agent jobs,
 --               maintenance, application queries, and related workload types, then returns a
---               fixed-width text report.
+--               fixed-width text report sized by @ReportWidth.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -47,15 +47,23 @@ DECLARE
     @ServerName         sysname,
     @ReportTime         varchar(19),
     @CutoffTime         datetime,
-    @Divider            varchar(120),
-    @HeaderRule         varchar(120),
-    @BlankLine          varchar(120),
+    @Divider            varchar(255),
+    @HeaderRule         varchar(255),
+    @BlankLine          varchar(255),
     @DbWidth            tinyint,
     @TypeWidth          tinyint,
     @NameWidth          tinyint,
     @ExecWidth          tinyint,
     @LastWidth          tinyint,
     @AvgWidth           tinyint,
+    @StatusWidth        tinyint,
+    @QsStateWidth       tinyint,
+    @ScanItemsWidth     tinyint,
+    @NoteWidth          tinyint,
+    @SummaryItemsWidth  tinyint,
+    @SummaryExecWidth   tinyint,
+    @SummaryDbWidth     tinyint,
+    @SummaryLastWidth   tinyint,
     @LineNo             int,
     @SortByUpper        varchar(12),
     @DatabaseName       sysname,
@@ -94,7 +102,12 @@ BEGIN
     RETURN
 END
 
-SET @ReportWidth = 120
+IF @ReportWidth IS NULL OR @ReportWidth < 80
+    SET @ReportWidth = 120
+
+IF @ReportWidth > 200
+    SET @ReportWidth = 200
+
 SET @ProductVersion = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
 SET @ServerName     = CAST(SERVERPROPERTY('MachineName') AS sysname)
                       + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
@@ -104,13 +117,55 @@ SET @Divider        = REPLICATE('-', @ReportWidth)
 SET @HeaderRule     = REPLICATE('=', @ReportWidth)
 SET @BlankLine      = REPLICATE(' ', @ReportWidth)
 
--- Column widths total 115 characters; single-space separators make 120.
-SET @DbWidth    = 20
-SET @TypeWidth  = 18
-SET @NameWidth  = 59
+-- Scale column widths from @ReportWidth. Metric columns stay fixed; name/note columns expand.
 SET @ExecWidth  = 8
 SET @LastWidth  = 5
 SET @AvgWidth   = 7
+SET @DbWidth    = 12 + ((@ReportWidth - 80) * 8) / 120
+SET @TypeWidth  = 14 + ((@ReportWidth - 80) * 6) / 120
+
+IF @DbWidth > 24
+    SET @DbWidth = 24
+
+IF @TypeWidth > 22
+    SET @TypeWidth = 22
+
+SET @NameWidth = @ReportWidth - @DbWidth - @TypeWidth - @ExecWidth - @LastWidth - @AvgWidth - 5
+
+IF @NameWidth < 20
+BEGIN
+    SET @NameWidth = 20
+
+    WHILE (@DbWidth + @TypeWidth + @NameWidth + @ExecWidth + @LastWidth + @AvgWidth + 5) > @ReportWidth
+          AND @TypeWidth > 12
+        SET @TypeWidth = @TypeWidth - 1
+
+    WHILE (@DbWidth + @TypeWidth + @NameWidth + @ExecWidth + @LastWidth + @AvgWidth + 5) > @ReportWidth
+          AND @DbWidth > 10
+        SET @DbWidth = @DbWidth - 1
+END
+
+SET @StatusWidth       = 10
+SET @QsStateWidth      = 12
+SET @ScanItemsWidth    = 6
+SET @NoteWidth         = @ReportWidth - @DbWidth - @StatusWidth - @QsStateWidth - @ScanItemsWidth - 4
+
+IF @NoteWidth < 12
+    SET @NoteWidth = 12
+
+SET @SummaryItemsWidth = 8
+SET @SummaryExecWidth  = 12
+SET @SummaryDbWidth    = 12
+SET @SummaryLastWidth  = @ReportWidth - @TypeWidth - @SummaryItemsWidth - @SummaryExecWidth - @SummaryDbWidth - 4
+
+IF @SummaryLastWidth < 16
+BEGIN
+    SET @SummaryLastWidth = 16
+
+    WHILE (@TypeWidth + @SummaryItemsWidth + @SummaryExecWidth + @SummaryDbWidth + @SummaryLastWidth + 4) > @ReportWidth
+          AND @SummaryDbWidth > 8
+        SET @SummaryDbWidth = @SummaryDbWidth - 1
+END
 
 IF OBJECT_ID('tempdb..#DatabaseScan') IS NOT NULL
     DROP TABLE #DatabaseScan
@@ -150,7 +205,7 @@ IF OBJECT_ID('tempdb..#Report') IS NOT NULL
 CREATE TABLE #Report
 (
     [LineNo]   int          NOT NULL,
-    ReportLine varchar(200) NOT NULL
+    ReportLine varchar(255) NOT NULL
 )
 
 INSERT INTO #DatabaseScan
@@ -437,10 +492,10 @@ UNION ALL
 SELECT @LineNo + 2,
        LEFT(
               LEFT('DATABASE' + @BlankLine, @DbWidth)
-            + ' ' + LEFT('STATUS' + @BlankLine, 10)
-            + ' ' + LEFT('QS STATE' + @BlankLine, 12)
-            + ' ' + LEFT('ITEMS' + @BlankLine, 6)
-            + ' ' + LEFT('NOTE' + @BlankLine, 58),
+            + ' ' + LEFT('STATUS' + @BlankLine, @StatusWidth)
+            + ' ' + LEFT('QS STATE' + @BlankLine, @QsStateWidth)
+            + ' ' + LEFT('ITEMS' + @BlankLine, @ScanItemsWidth)
+            + ' ' + LEFT('NOTE' + @BlankLine, @NoteWidth),
             @ReportWidth)
 UNION ALL
 SELECT @LineNo + 3, LEFT(@Divider, @ReportWidth)
@@ -452,10 +507,10 @@ SELECT
     @LineNo + ROW_NUMBER() OVER (ORDER BY d.DatabaseName) - 1,
     LEFT(
           LEFT(d.DatabaseName + @BlankLine, @DbWidth)
-        + ' ' + LEFT(d.ScanStatus + @BlankLine, 10)
-        + ' ' + LEFT(ISNULL(d.QueryStoreState, 'OFF') + @BlankLine, 12)
-        + ' ' + RIGHT(REPLICATE(' ', 6) + CAST(d.WorkloadCount AS varchar(10)), 6)
-        + ' ' + LEFT(ISNULL(d.Note, '') + @BlankLine, 58),
+        + ' ' + LEFT(d.ScanStatus + @BlankLine, @StatusWidth)
+        + ' ' + LEFT(ISNULL(d.QueryStoreState, 'OFF') + @BlankLine, @QsStateWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @ScanItemsWidth) + CAST(d.WorkloadCount AS varchar(10)), @ScanItemsWidth)
+        + ' ' + LEFT(ISNULL(d.Note, '') + @BlankLine, @NoteWidth),
         @ReportWidth)
   FROM #DatabaseScan AS d
 
@@ -468,10 +523,10 @@ VALUES
     (@LineNo + 2, LEFT(@Divider, @ReportWidth)),
     (@LineNo + 3, LEFT(
           LEFT('TYPE' + @BlankLine, @TypeWidth)
-        + ' ' + LEFT('ITEMS' + @BlankLine, 8)
-        + ' ' + LEFT('EXECUTIONS' + @BlankLine, 12)
-        + ' ' + LEFT('DATABASES' + @BlankLine, 12)
-        + ' ' + LEFT('LAST EXEC' + @BlankLine, 19),
+        + ' ' + LEFT('ITEMS' + @BlankLine, @SummaryItemsWidth)
+        + ' ' + LEFT('EXECUTIONS' + @BlankLine, @SummaryExecWidth)
+        + ' ' + LEFT('DATABASES' + @BlankLine, @SummaryDbWidth)
+        + ' ' + LEFT('LAST EXEC' + @BlankLine, @SummaryLastWidth),
         @ReportWidth)),
     (@LineNo + 4, LEFT(@Divider, @ReportWidth))
 
@@ -482,10 +537,10 @@ SELECT
     @LineNo + ROW_NUMBER() OVER (ORDER BY SUM(w.Executions) DESC, w.WorkloadType) - 1,
     LEFT(
           LEFT(w.WorkloadType + @BlankLine, @TypeWidth)
-        + ' ' + RIGHT(REPLICATE(' ', 8) + CAST(COUNT(*) AS varchar(10)), 8)
-        + ' ' + RIGHT(REPLICATE(' ', 12) + CAST(SUM(w.Executions) AS varchar(15)), 12)
-        + ' ' + RIGHT(REPLICATE(' ', 12) + CAST(COUNT(DISTINCT w.DatabaseName) AS varchar(10)), 12)
-        + ' ' + LEFT(CONVERT(varchar(19), MAX(w.LastExecutionTime), 120) + @BlankLine, 19),
+        + ' ' + RIGHT(REPLICATE(' ', @SummaryItemsWidth) + CAST(COUNT(*) AS varchar(10)), @SummaryItemsWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @SummaryExecWidth) + CAST(SUM(w.Executions) AS varchar(15)), @SummaryExecWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @SummaryDbWidth) + CAST(COUNT(DISTINCT w.DatabaseName) AS varchar(10)), @SummaryDbWidth)
+        + ' ' + LEFT(CONVERT(varchar(19), MAX(w.LastExecutionTime), 120) + @BlankLine, @SummaryLastWidth),
         @ReportWidth)
   FROM #Workload AS w
  GROUP BY w.WorkloadType
