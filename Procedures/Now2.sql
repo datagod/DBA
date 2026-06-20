@@ -40,7 +40,8 @@ DECLARE
     @is_blocker       bit,
     @input_buffer     nvarchar(max),
     @sql_text         nvarchar(max),
-    @HadSessions      bit
+    @HadSessions      bit,
+    @Delay            varchar(8)
 
 SET @MajorVersion = CONVERT(tinyint,
     LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
@@ -369,7 +370,10 @@ SELECT
   FROM #PendingIO
 
 IF @WaitIfBlocked = 1 AND @BlockedSessions > 0 AND @WaitSeconds > 0
-    WAITFOR DELAY CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
+BEGIN
+    SET @Delay = CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
+    WAITFOR DELAY @Delay
+END
 
 GO
 
