@@ -1,4 +1,4 @@
-
+USE dba
 GO
 
 /*
@@ -14,25 +14,8 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-CREATE OR ALTER FUNCTION dbo.Now2_FormatMs
-(
-    @Milliseconds int
-)
-RETURNS varchar(12)
-AS
-BEGIN
-    DECLARE @Seconds int = ISNULL(@Milliseconds, 0) / 1000
-    DECLARE @Minutes int = @Seconds / 60
-    DECLARE @Remainder int = @Seconds % 60
-
-    RETURN CAST(@Minutes AS varchar(10)) + ':'
-         + RIGHT('0' + CAST(@Remainder AS varchar(2)), 2)
-END
-GO
-
 CREATE OR ALTER PROCEDURE dbo.Now2
 (
-    @ReportWidth       tinyint = 120,
     @WaitIfBlocked     bit     = 1,
     @WaitSeconds       tinyint = 3
 )
@@ -41,48 +24,23 @@ AS
 -- Date Created: June 18, 2026
 -- Author:       Bill McEvoy
 -- Description:  Modern current-activity report for SQL Server 2019+. Uses DMVs to show active
---               sessions, blocking, running SQL, input buffers, and pending file I/O in a
---               fixed-width text report.
+--               sessions, blocking, running SQL, input buffers, and pending file I/O. Output
+--               format matches the original Now procedure (PRINT and SELECT result sets).
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
 DECLARE
     @MajorVersion     tinyint,
-    @ProductVersion   varchar(30),
-    @ServerName       sysname,
-    @ReportTime       varchar(19),
-    @Divider          varchar(120),
-    @HeaderRule       varchar(120),
-    @BlankLine        varchar(120),
-    @LineNo           int,
+    @Version          varchar(10),
     @ActiveSessions   int,
     @BlockedSessions  int,
-    @RunningRequests  int,
     @TotalSessions    int,
-    @PendingIO        int,
-    @Line             varchar(200),
     @session_id       int,
-    @blocking_id      int,
+    @request_id       int,
     @is_blocker       bit,
-    @login_name       nvarchar(128),
-    @host_name        nvarchar(128),
-    @database_name    sysname,
-    @status           nvarchar(30),
-    @command          nvarchar(32),
-    @wait_type        nvarchar(60),
-    @cpu_time         int,
-    @elapsed_time     int,
-    @phys_io          bigint,
-    @reads            bigint,
-    @writes           bigint,
-    @logical_reads    bigint,
-    @memory_mb        decimal(12, 2),
-    @program_name     nvarchar(128),
-    @login_time       varchar(19),
-    @last_request     varchar(19),
-    @sql_text         nvarchar(max),
     @input_buffer     nvarchar(max),
-    @chunk            nvarchar(max)
+    @sql_text         nvarchar(max),
+    @HadSessions      bit
 
 SET @MajorVersion = CONVERT(tinyint,
     LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
@@ -94,14 +52,7 @@ BEGIN
     RETURN
 END
 
-SET @ReportWidth = 120
-SET @ProductVersion = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
-SET @ServerName     = CAST(SERVERPROPERTY('MachineName') AS sysname)
-                      + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
-SET @ReportTime     = CONVERT(varchar(19), GETDATE(), 120)
-SET @Divider        = REPLICATE('-', @ReportWidth)
-SET @HeaderRule     = REPLICATE('=', @ReportWidth)
-SET @BlankLine      = REPLICATE(' ', @ReportWidth)
+SET @Version = '2.0'
 
 IF OBJECT_ID('tempdb..#Sessions') IS NOT NULL
     DROP TABLE #Sessions
@@ -120,11 +71,7 @@ CREATE TABLE #Sessions
     command          nvarchar(32)   NULL,
     wait_type        nvarchar(60)   NULL,
     cpu_time         int            NOT NULL,
-    elapsed_time     int            NOT NULL,
     phys_io          bigint         NOT NULL,
-    reads            bigint         NOT NULL,
-    writes           bigint         NOT NULL,
-    logical_reads    bigint         NOT NULL,
     memory_mb        decimal(12, 2) NOT NULL,
     program_name     nvarchar(128)  NULL,
     login_time       datetime       NULL,
@@ -138,20 +85,11 @@ IF OBJECT_ID('tempdb..#PendingIO') IS NOT NULL
 
 CREATE TABLE #PendingIO
 (
-    database_name sysname        NOT NULL,
-    file_name     sysname        NOT NULL,
-    file_path     nvarchar(260)  NOT NULL,
-    file_id       int            NOT NULL,
-    io_pending    bit            NOT NULL
-)
-
-IF OBJECT_ID('tempdb..#Report') IS NOT NULL
-    DROP TABLE #Report
-
-CREATE TABLE #Report
-(
-    [LineNo]     int          NOT NULL,
-    ReportLine   varchar(200) NOT NULL
+    DatabaseID   int            NOT NULL,
+    FileName     sysname        NOT NULL,
+    DBFileName   nvarchar(260)  NOT NULL,
+    FileID       int            NOT NULL,
+    IO_Pending   bit            NOT NULL
 )
 
 ;WITH ActiveSessionIds AS
@@ -192,11 +130,7 @@ INSERT INTO #Sessions
     command,
     wait_type,
     cpu_time,
-    elapsed_time,
     phys_io,
-    reads,
-    writes,
-    logical_reads,
     memory_mb,
     program_name,
     login_time,
@@ -224,11 +158,7 @@ SELECT
     r.command,
     COALESCE(r.wait_type, r.last_wait_type),
     ISNULL(r.cpu_time, 0),
-    ISNULL(r.total_elapsed_time, 0),
     ISNULL(conn.phys_io, 0),
-    ISNULL(r.reads, 0),
-    ISNULL(r.writes, 0),
-    ISNULL(r.logical_reads, 0),
     CAST(s.memory_usage * 8192.0 / 1024 / 1024 AS decimal(12, 2)),
     s.program_name,
     s.login_time,
@@ -261,14 +191,14 @@ OUTER APPLY sys.dm_exec_input_buffer(s.session_id, ISNULL(r.request_id, 0)) AS i
 
 INSERT INTO #PendingIO
 (
-    database_name,
-    file_name,
-    file_path,
-    file_id,
-    io_pending
+    DatabaseID,
+    FileName,
+    DBFileName,
+    FileID,
+    IO_Pending
 )
 SELECT
-    DB_NAME(mf.database_id),
+    mf.database_id,
     mf.name,
     mf.physical_name,
     mf.file_id,
@@ -282,303 +212,164 @@ INNER JOIN sys.master_files AS mf
 
 SELECT @ActiveSessions  = COUNT(*) FROM #Sessions
 SELECT @BlockedSessions = COUNT(*) FROM #Sessions WHERE blocking_id > 0
-SELECT @RunningRequests = COUNT(*) FROM #Sessions WHERE status = 'running'
-SELECT @TotalSessions   = COUNT(*) FROM sys.dm_exec_sessions WHERE is_user_process = 1 AND session_id > 50
-SELECT @PendingIO       = COUNT(*) FROM #PendingIO
+SELECT @TotalSessions   = COUNT(*) FROM sys.dm_exec_sessions
 
-SET @LineNo = 0
-
-INSERT INTO #Report ([LineNo], ReportLine)
-SELECT @LineNo, LEFT(@HeaderRule, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 1, LEFT('= CURRENT ACTIVITY =' + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 2, LEFT(@HeaderRule, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 3, LEFT(@ReportTime + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 4, LEFT(' Version 2.0  |  Server: ' + @ServerName + '  |  SQL Server ' + @ProductVersion + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 5, LEFT(@BlankLine, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 6,
-       LEFT(' Active SPIDs: ' + CAST(@ActiveSessions AS varchar(10))
-            + '  |  Blocked SPIDs: ' + CAST(@BlockedSessions AS varchar(10))
-            + '  |  Running: ' + CAST(@RunningRequests AS varchar(10))
-            + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT @LineNo + 7,
-       LEFT(' Total SPIDs: ' + CAST(@TotalSessions AS varchar(10))
-            + '  |  Pending file I/O: ' + CAST(@PendingIO AS varchar(10))
-            + @BlankLine, @ReportWidth)
-
-SET @LineNo = 8
+PRINT '===================='
+PRINT '= CURRENT ACTIVITY ='
+PRINT '===================='
+PRINT CONVERT(char(19), GETDATE(), 120)
+PRINT 'Version ' + @Version
+PRINT ' '
+PRINT 'Active  SPIDs: ' + CONVERT(varchar(8), @ActiveSessions)
+PRINT 'Blocked SPIDs: ' + CONVERT(varchar(8), @BlockedSessions)
+PRINT 'Total   SPIDs: ' + CONVERT(varchar(8), @TotalSessions)
 
 IF @BlockedSessions > 0
 BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    SELECT @LineNo, LEFT(@BlankLine, @ReportWidth)
-    UNION ALL
-    SELECT @LineNo + 1, LEFT(' Blocked Process Summary' + @BlankLine, @ReportWidth)
-    UNION ALL
-    SELECT @LineNo + 2, LEFT(@Divider, @ReportWidth)
-    UNION ALL
-    SELECT @LineNo + 3,
-           LEFT(
-                  LEFT('LOGIN', 20)
-                + ' ' + LEFT('HOST', 20)
-                + ' ' + LEFT('DATABASE', 25)
-                + ' ' + LEFT('SPID', 5)
-                + ' ' + LEFT('BLOCK', 6)
-                + ' ' + LEFT('PHYS_IO', 8)
-                + ' ' + LEFT('CPU', 8)
-                + ' ' + LEFT('MEM(MB)', 8),
-                @ReportWidth)
-    UNION ALL
-    SELECT @LineNo + 4, LEFT(@Divider, @ReportWidth)
+    PRINT ' '
+    PRINT ' '
+    PRINT 'Blocked Process Summary'
+    PRINT '-----------------------'
+    PRINT ' '
 
-    SET @LineNo = @LineNo + 5
-
-    INSERT INTO #Report ([LineNo], ReportLine)
     SELECT
-        @LineNo + ROW_NUMBER() OVER (ORDER BY s.blocking_id DESC, s.session_id) - 1,
-        LEFT(
-              LEFT(ISNULL(s.login_name, '') + @BlankLine, 20)
-            + ' ' + LEFT(ISNULL(s.host_name, '') + @BlankLine, 20)
-            + ' ' + LEFT(ISNULL(s.database_name, '') + @BlankLine, 25)
-            + ' ' + RIGHT(REPLICATE(' ', 5) + CAST(s.session_id AS varchar(10)), 5)
-            + ' ' + RIGHT(REPLICATE(' ', 6) + CAST(s.blocking_id AS varchar(10)), 6)
-            + ' ' + RIGHT(REPLICATE(' ', 8) + CAST(s.phys_io AS varchar(12)), 8)
-            + ' ' + RIGHT(REPLICATE(' ', 8) + dbo.Now2_FormatMs(s.cpu_time), 8)
-            + ' ' + RIGHT(REPLICATE(' ', 8) + CAST(s.memory_mb AS varchar(12)), 8),
-            @ReportWidth)
-      FROM #Sessions AS s
-     WHERE s.blocking_id > 0
-
-    SELECT @LineNo = ISNULL(MAX([LineNo]), @LineNo) + 1 FROM #Report
-    INSERT INTO #Report ([LineNo], ReportLine) VALUES (@LineNo, LEFT(@BlankLine, @ReportWidth))
-    SET @LineNo = @LineNo + 1
-END
-
-IF @ActiveSessions = 0
-BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES
-        (@LineNo, LEFT(@BlankLine, @ReportWidth)),
-        (@LineNo + 1, LEFT(' No active user sessions reported.' + @BlankLine, @ReportWidth))
-    SET @LineNo = @LineNo + 2
+        'loginame'     = LEFT(login_name, 20),
+        'hostname'     = LEFT(host_name, 20),
+        'database'     = LEFT(database_name, 25),
+        'spid'         = STR(session_id, 4, 0),
+        'block'        = STR(blocking_id, 5, 0),
+        'phys_io'      = STR(phys_io, 8, 0),
+        'cpu(mm:ss)'   = STR((cpu_time / 1000 / 60), 6) + ':'
+                       + CASE
+                             WHEN LEFT(STR(((cpu_time / 1000) % 60), 2), 1) = ' '
+                                 THEN STUFF(STR(((cpu_time / 1000) % 60), 2), 1, 1, '0')
+                             ELSE STR(((cpu_time / 1000) % 60), 2)
+                         END,
+        'mem(MB)'      = STR(memory_mb, 8, 2),
+        'program_name' = LEFT(program_name, 50),
+        'command'      = command,
+        'lastwaittype' = LEFT(wait_type, 25),
+        'login_time'   = CONVERT(char(19), login_time, 120),
+        'last_batch'   = CONVERT(char(19), last_request, 120),
+        'status'       = LEFT(status, 20)
+      FROM #Sessions
+     WHERE blocking_id > 0
 END
 
 DECLARE SessionCursor CURSOR LOCAL FAST_FORWARD FOR
 SELECT
     session_id,
-    blocking_id,
+    request_id,
     is_blocker,
-    login_name,
-    host_name,
-    database_name,
-    status,
-    command,
-    wait_type,
-    cpu_time,
-    elapsed_time,
-    phys_io,
-    reads,
-    writes,
-    logical_reads,
-    memory_mb,
-    program_name,
-    CONVERT(varchar(19), login_time, 120),
-    CONVERT(varchar(19), last_request, 120),
-    sql_text,
-    input_buffer
+    input_buffer,
+    sql_text
 FROM #Sessions
 ORDER BY SortOrder
 
 OPEN SessionCursor
-FETCH NEXT FROM SessionCursor INTO
-    @session_id, @blocking_id, @is_blocker, @login_name, @host_name, @database_name,
-    @status, @command, @wait_type, @cpu_time, @elapsed_time, @phys_io, @reads, @writes,
-    @logical_reads, @memory_mb, @program_name, @login_time, @last_request,
-    @sql_text, @input_buffer
+FETCH NEXT FROM SessionCursor
+ INTO @session_id, @request_id, @is_blocker, @input_buffer, @sql_text
+
+SET @HadSessions = 0
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES
-        (@LineNo, LEFT(@BlankLine, @ReportWidth)),
-        (@LineNo + 1, LEFT(@BlankLine, @ReportWidth)),
-        (@LineNo + 2, LEFT('O' + REPLICATE('x', @ReportWidth - 2) + 'O', @ReportWidth)),
-        (@LineNo + 3, LEFT('O' + REPLICATE('x', @ReportWidth - 2) + 'O', @ReportWidth))
+    SET @HadSessions = 1
 
-    SET @LineNo = @LineNo + 4
+    PRINT ' '
+    PRINT ' '
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT ' '
+    PRINT ' '
+    PRINT ' '
 
     IF @is_blocker = 1
     BEGIN
-        INSERT INTO #Report ([LineNo], ReportLine)
-        SELECT @LineNo, LEFT(@HeaderRule, @ReportWidth)
-        UNION ALL
-        SELECT @LineNo + 1, LEFT('=== BLOCKER ===' + @BlankLine, @ReportWidth)
-        UNION ALL
-        SELECT @LineNo + 2, LEFT(@HeaderRule, @ReportWidth)
-        UNION ALL
-        SELECT @LineNo + 3, LEFT(@BlankLine, @ReportWidth)
-
-        SET @LineNo = @LineNo + 4
+        PRINT '================'
+        PRINT '=== BLOCKER ===='
+        PRINT '================'
+        PRINT ' '
     END
 
-    SET @Line =
-          LEFT(ISNULL(@login_name, '') + @BlankLine, 30)
-        + ' ' + LEFT(ISNULL(@host_name, '') + @BlankLine, 30)
-        + ' ' + LEFT(ISNULL(@database_name, '') + @BlankLine, 30)
+    SELECT
+        'loginame'     = LEFT(login_name, 30),
+        'hostname'     = LEFT(host_name, 30),
+        'database'     = LEFT(database_name, 30),
+        'spid'         = STR(session_id, 4, 0),
+        'block'        = STR(blocking_id, 5, 0),
+        'phys_io'      = STR(phys_io, 8, 0),
+        'cpu(mm:ss)'   = STR((cpu_time / 1000 / 60), 6) + ':'
+                       + CASE
+                             WHEN LEFT(STR(((cpu_time / 1000) % 60), 2), 1) = ' '
+                                 THEN STUFF(STR(((cpu_time / 1000) % 60), 2), 1, 1, '0')
+                             ELSE STR(((cpu_time / 1000) % 60), 2)
+                         END,
+        'mem(MB)'      = STR(memory_mb, 8, 2),
+        'program_name' = LEFT(program_name, 50),
+        'command'      = command,
+        'lastwaittype' = LEFT(wait_type, 25),
+        'login_time'   = CONVERT(char(19), login_time, 120),
+        'last_batch'   = CONVERT(char(19), last_request, 120),
+        'status'       = LEFT(status, 20)
+      FROM #Sessions
+     WHERE session_id = @session_id
 
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES (@LineNo, LEFT(@Line + @BlankLine, @ReportWidth))
-
-    SET @Line =
-          RIGHT(REPLICATE(' ', 5) + CAST(@session_id AS varchar(10)), 5)
-        + ' ' + RIGHT(REPLICATE(' ', 6) + CAST(@blocking_id AS varchar(10)), 6)
-        + ' ' + RIGHT(REPLICATE(' ', 10) + CAST(@phys_io AS varchar(12)), 10)
-        + ' ' + RIGHT(REPLICATE(' ', 10) + dbo.Now2_FormatMs(@cpu_time), 10)
-        + ' ' + RIGHT(REPLICATE(' ', 8) + CAST(@memory_mb AS varchar(12)), 8)
-        + ' ' + LEFT(ISNULL(@program_name, '') + @BlankLine, 50)
-
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES (@LineNo + 1, LEFT(@Line + @BlankLine, @ReportWidth))
-
-    SET @Line =
-          LEFT(ISNULL(@command, '') + @BlankLine, 20)
-        + ' ' + LEFT(ISNULL(@wait_type, '') + @BlankLine, 25)
-        + ' ' + LEFT(ISNULL(@status, '') + @BlankLine, 20)
-
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES (@LineNo + 2, LEFT(@Line + @BlankLine, @ReportWidth))
-
-    SET @Line =
-        ' login time: ' + ISNULL(@login_time, '')
-        + '  last batch: ' + ISNULL(@last_request, '')
-        + '  reads: ' + CAST(@reads AS varchar(12))
-        + '  writes: ' + CAST(@writes AS varchar(12))
-
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES (@LineNo + 3, LEFT(@Line + @BlankLine, @ReportWidth))
-
-    SET @LineNo = @LineNo + 4
+    PRINT '----------------------'
+    PRINT '-- DBCC INPUTBUFFER --'
+    PRINT '----------------------'
+    PRINT ' '
 
     IF @input_buffer IS NOT NULL AND LTRIM(RTRIM(@input_buffer)) <> ''
-    BEGIN
-        INSERT INTO #Report ([LineNo], ReportLine)
-        VALUES (@LineNo, LEFT(@Divider, @ReportWidth))
+        PRINT @input_buffer
+    ELSE
+        PRINT '(no input buffer available)'
 
-        INSERT INTO #Report ([LineNo], ReportLine)
-        VALUES (@LineNo + 1, LEFT(' -- INPUT BUFFER --' + @BlankLine, @ReportWidth))
-
-        SET @LineNo = @LineNo + 2
-        SET @chunk = REPLACE(REPLACE(@input_buffer, CHAR(13), ' '), CHAR(10), ' ')
-
-        WHILE LEN(@chunk) > 0
-        BEGIN
-            INSERT INTO #Report ([LineNo], ReportLine)
-            VALUES (@LineNo, LEFT('   ' + LEFT(@chunk, @ReportWidth - 3), @ReportWidth))
-
-            SET @chunk = SUBSTRING(@chunk, @ReportWidth - 2, LEN(@chunk))
-            SET @LineNo = @LineNo + 1
-        END
-    END
+    PRINT ' '
+    PRINT ' '
 
     IF @sql_text IS NOT NULL AND LTRIM(RTRIM(@sql_text)) <> ''
     BEGIN
-        INSERT INTO #Report ([LineNo], ReportLine)
-        VALUES (@LineNo, LEFT(@Divider, @ReportWidth))
-
-        INSERT INTO #Report ([LineNo], ReportLine)
-        VALUES (@LineNo + 1, LEFT(' -- CURRENT SQL --' + @BlankLine, @ReportWidth))
-
-        SET @LineNo = @LineNo + 2
-        SET @chunk = REPLACE(REPLACE(@sql_text, CHAR(13), ' '), CHAR(10), ' ')
-
-        WHILE LEN(@chunk) > 0
-        BEGIN
-            INSERT INTO #Report ([LineNo], ReportLine)
-            VALUES (@LineNo, LEFT('   ' + LEFT(@chunk, @ReportWidth - 3), @ReportWidth))
-
-            SET @chunk = SUBSTRING(@chunk, @ReportWidth - 2, LEN(@chunk))
-            SET @LineNo = @LineNo + 1
-        END
+        PRINT '------------------'
+        PRINT '-- fn_get_sql() --'
+        PRINT '------------------'
+        PRINT ' '
+        PRINT @sql_text
     END
 
-    FETCH NEXT FROM SessionCursor INTO
-        @session_id, @blocking_id, @is_blocker, @login_name, @host_name, @database_name,
-        @status, @command, @wait_type, @cpu_time, @elapsed_time, @phys_io, @reads, @writes,
-        @logical_reads, @memory_mb, @program_name, @login_time, @last_request,
-        @sql_text, @input_buffer
+    FETCH NEXT FROM SessionCursor
+     INTO @session_id, @request_id, @is_blocker, @input_buffer, @sql_text
+END
+
+IF @HadSessions = 1
+BEGIN
+    PRINT ' '
+    PRINT ' '
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT ' '
+    PRINT ' '
+    PRINT ' '
 END
 
 CLOSE SessionCursor
 DEALLOCATE SessionCursor
 
-IF @ActiveSessions > 0
-BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES
-        (@LineNo, LEFT(@BlankLine, @ReportWidth)),
-        (@LineNo + 1, LEFT(@BlankLine, @ReportWidth)),
-        (@LineNo + 2, LEFT('O' + REPLICATE('x', @ReportWidth - 2) + 'O', @ReportWidth)),
-        (@LineNo + 3, LEFT('O' + REPLICATE('x', @ReportWidth - 2) + 'O', @ReportWidth))
+PRINT '----------------------'
+PRINT '-- Pending File I/O --'
+PRINT '----------------------'
+PRINT ' '
 
-    SET @LineNo = @LineNo + 4
-END
-
-INSERT INTO #Report ([LineNo], ReportLine)
-VALUES (@LineNo, LEFT(@Divider, @ReportWidth))
-
-SET @LineNo = @LineNo + 1
-
-INSERT INTO #Report ([LineNo], ReportLine)
-VALUES (@LineNo, LEFT(' -- Pending File I/O --' + @BlankLine, @ReportWidth))
-
-SET @LineNo = @LineNo + 1
-
-INSERT INTO #Report ([LineNo], ReportLine)
-VALUES (@LineNo, LEFT(@BlankLine, @ReportWidth))
-
-SET @LineNo = @LineNo + 1
-
-IF @PendingIO = 0
-BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    VALUES (@LineNo, LEFT(' No pending file I/O reported.' + @BlankLine, @ReportWidth))
-    SET @LineNo = @LineNo + 1
-END
-ELSE
-BEGIN
-    INSERT INTO #Report ([LineNo], ReportLine)
-    SELECT
-        @LineNo + ROW_NUMBER() OVER (ORDER BY p.database_name, p.file_name) - 1,
-        LEFT(
-              LEFT(p.database_name + @BlankLine, 25)
-            + ' ' + LEFT(p.file_name + @BlankLine, 30)
-            + ' ' + LEFT(p.file_path + @BlankLine, 50)
-            + ' ' + RIGHT(REPLICATE(' ', 5) + CAST(p.file_id AS varchar(10)), 5)
-            + ' ' + CASE WHEN p.io_pending = 1 THEN 'Y' ELSE 'N' END,
-            @ReportWidth)
-      FROM #PendingIO AS p
-
-    SELECT @LineNo = ISNULL(MAX([LineNo]), @LineNo) + 1 FROM #Report
-END
-
-INSERT INTO #Report ([LineNo], ReportLine)
-VALUES (@LineNo, LEFT(@HeaderRule, @ReportWidth))
-
-SELECT ReportLine
-  FROM #Report
- ORDER BY [LineNo]
+SELECT
+    'Database'   = LEFT(DB_NAME(DatabaseID), 25),
+    'FileName'   = LEFT(FileName, 30),
+    'DBFileName' = LEFT(DBFileName, 50),
+    FileID,
+    IO_Pending
+  FROM #PendingIO
 
 IF @WaitIfBlocked = 1 AND @BlockedSessions > 0 AND @WaitSeconds > 0
-BEGIN
-   declare @Delay varchar(8) = CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
-   WAITFOR DELAY @Delay
-END
+    WAITFOR DELAY CONVERT(varchar(8), DATEADD(second, @WaitSeconds, 0), 108)
 
 GO
 
@@ -586,10 +377,4 @@ IF OBJECT_ID('dbo.Now2') IS NOT NULL
     PRINT 'Procedure Now2 created.'
 ELSE
     PRINT 'Procedure Now2 NOT created.'
-GO
-
-IF OBJECT_ID('dbo.Now2_FormatMs') IS NOT NULL
-    PRINT 'Function Now2_FormatMs created.'
-ELSE
-    PRINT 'Function Now2_FormatMs NOT created.'
 GO
