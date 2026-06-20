@@ -40,6 +40,7 @@ CREATE TABLE dbo.IndexAnalysis
     UserUpdates       bigint           NOT NULL,
     TotalReads        bigint           NOT NULL,
     ReadWriteRatio    decimal(18, 4)   NULL,
+    RecordCount       bigint           NOT NULL,
     SizeMB            decimal(12, 1)   NOT NULL,
     LastUserSeek      datetime         NULL,
     LastUserScan      datetime         NULL,
@@ -65,7 +66,7 @@ GO
 
 CREATE NONCLUSTERED INDEX IX_IndexAnalysis__DatabaseName_CaptureDate
     ON dbo.IndexAnalysis (DatabaseName, CaptureDate DESC)
-    INCLUDE (SchemaName, TableName, IndexName, TotalReads, UserUpdates)
+    INCLUDE (SchemaName, TableName, IndexName, TotalReads, UserUpdates, RecordCount)
 GO
 
 IF OBJECT_ID('dbo.IndexAnalysis') IS NOT NULL

@@ -55,6 +55,7 @@ DECLARE
     @TypeWidth           tinyint,
     @NumWidth            tinyint,
     @RatioWidth          tinyint,
+    @RowsWidth           tinyint,
     @SizeWidth           tinyint,
     @DateWidth           tinyint,
     @TotalIndexes        int,
@@ -124,13 +125,14 @@ SET @Divider        = REPLICATE('-', @ReportWidth)
 SET @HeaderRule     = REPLICATE('=', @ReportWidth)
 SET @BlankLine      = REPLICATE(' ', @ReportWidth)
 
--- Column widths total 111 characters; 9 one-character separators make 120.
-SET @ObjectWidth = 34
-SET @IndexWidth  = 28
+-- Column widths total 100 characters; separators make 120.
+SET @ObjectWidth = 28
+SET @IndexWidth  = 22
 SET @TypeWidth   = 3
-SET @NumWidth    = 7
-SET @RatioWidth  = 5
-SET @SizeWidth   = 8
+SET @NumWidth    = 6
+SET @RatioWidth  = 4
+SET @RowsWidth   = 7
+SET @SizeWidth   = 7
 SET @DateWidth   = 5
 
 IF OBJECT_ID('tempdb..#IndexUsage') IS NOT NULL
@@ -154,6 +156,7 @@ CREATE TABLE #IndexUsage
     TotalReads       bigint          NOT NULL,
     ReadWriteRatio   varchar(32)     NOT NULL,
     ReadWriteNumeric decimal(18, 4)  NULL,
+    RecordCount      bigint          NOT NULL,
     SizeMB           decimal(12, 1)  NOT NULL,
     LastUserSeek     datetime        NULL,
     LastUserScan     datetime        NULL,
@@ -202,6 +205,7 @@ INSERT INTO #IndexUsage
     TotalReads,
     ReadWriteRatio,
     ReadWriteNumeric,
+    RecordCount,
     SizeMB,
     LastUserSeek,
     LastUserScan,
@@ -260,6 +264,7 @@ SELECT
                          ELSE CONVERT(varchar(32), ia.ReadWriteRatio)
                      END,
     ia.ReadWriteRatio,
+    ia.RecordCount,
     ia.SizeMB,
     ia.LastUserSeek,
     ia.LastUserScan,
@@ -349,6 +354,7 @@ SELECT @LineNo + 9,
             + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'LOOK', @NumWidth)
             + ' ' + RIGHT(REPLICATE(' ', @NumWidth) + 'UPD', @NumWidth)
             + ' ' + RIGHT(REPLICATE(' ', @RatioWidth) + 'R/W', @RatioWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @RowsWidth) + 'ROWS', @RowsWidth)
             + ' ' + RIGHT(REPLICATE(' ', @SizeWidth) + 'MB', @SizeWidth)
             + ' ' + LEFT('USED' + @BlankLine, @DateWidth),
             @ReportWidth)
@@ -391,6 +397,13 @@ SELECT
                 ELSE CAST(u.UserUpdates AS varchar(10))
             END, @NumWidth)
         + ' ' + RIGHT(REPLICATE(' ', @RatioWidth) + LEFT(u.ReadWriteRatio, @RatioWidth), @RatioWidth)
+        + ' ' + RIGHT(REPLICATE(' ', @RowsWidth) + CASE
+                WHEN u.RecordCount >= 1000000000 THEN CAST(u.RecordCount / 1000000000 AS varchar(10)) + 'B'
+                WHEN u.RecordCount >= 1000000 THEN LTRIM(STR(u.RecordCount / 1000000.0, 4, 1)) + 'M'
+                WHEN u.RecordCount >= 10000 THEN CAST(u.RecordCount / 1000 AS varchar(10)) + 'K'
+                WHEN u.RecordCount >= 1000 THEN LTRIM(STR(u.RecordCount / 1000.0, 4, 1)) + 'K'
+                ELSE CAST(u.RecordCount AS varchar(10))
+            END, @RowsWidth)
         + ' ' + RIGHT(REPLICATE(' ', @SizeWidth) + CAST(u.SizeMB AS varchar(10)), @SizeWidth)
         + ' ' + LEFT(u.LastUseDate + @BlankLine, @DateWidth),
         @ReportWidth)
@@ -404,7 +417,7 @@ SELECT @LineNo, LEFT(@Divider, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 1, LEFT(' Legend: CL=clustered  NC=nonclustered  HP=heap  CC/CS=columnstore  *=disabled' + @BlankLine, @ReportWidth)
 UNION ALL
-SELECT @LineNo + 2, LEFT(' USED=last seek/scan/lookup/update (MM-DD). R/W=read operations per write.' + @BlankLine, @ReportWidth)
+SELECT @LineNo + 2, LEFT(' USED=last seek/scan/lookup/update (MM-DD). ROWS=records in index. R/W=reads per write.' + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT @LineNo + 3, LEFT(' Note: usage stats reset at instance restart; missing rows mean no activity since restart.' + @BlankLine, @ReportWidth)
 UNION ALL

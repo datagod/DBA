@@ -34,7 +34,7 @@ Persistent storage for index usage analysis results. Deploy to the tool database
 
 - One row per index per execution
 - Grouped by `AnalysisRunID` and `CaptureDate` for each run
-- Stores target database name, schema, table, index identity, usage counts, size, last-used timestamps, and run filters
+- Stores target database name, schema, table, index identity, usage counts, record count, size, last-used timestamps, and run filters
 - Indexed on `AnalysisRunID` and `(DatabaseName, CaptureDate)`
 
 Deployment:

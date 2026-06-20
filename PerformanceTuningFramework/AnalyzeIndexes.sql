@@ -100,6 +100,7 @@ CREATE TABLE #IndexUsage
     UserUpdates      bigint          NOT NULL,
     TotalReads       bigint          NOT NULL,
     ReadWriteNumeric decimal(18, 4)  NULL,
+    RecordCount      bigint          NOT NULL,
     SizeMB           decimal(12, 1)   NOT NULL,
     LastUserSeek     datetime        NULL,
     LastUserScan     datetime        NULL,
@@ -111,11 +112,12 @@ CREATE TABLE #IndexUsage
 )
 
 SET @Sql = N'
-;WITH IndexSizes AS
+;WITH IndexMetrics AS
 (
     SELECT
         p.object_id,
         p.index_id,
+        RecordCount = SUM(p.rows),
         SizeMB = SUM(a.total_pages) * 8.0 / 1024.0
     FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.partitions AS p
     INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.allocation_units AS a
@@ -136,6 +138,7 @@ INSERT INTO #IndexUsage
     UserUpdates,
     TotalReads,
     ReadWriteNumeric,
+    RecordCount,
     SizeMB,
     LastUserSeek,
     LastUserScan,
@@ -169,7 +172,8 @@ SELECT
                            ELSE (ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0))
                                 * 1.0 / us.user_updates
                        END,
-    SizeMB = ISNULL(sz.SizeMB, 0),
+    RecordCount = ISNULL(im.RecordCount, 0),
+    SizeMB = ISNULL(im.SizeMB, 0),
     LastUserSeek = us.last_user_seek,
     LastUserScan = us.last_user_scan,
     LastUserLookup = us.last_user_lookup,
@@ -186,9 +190,9 @@ LEFT JOIN sys.dm_db_index_usage_stats AS us
     ON us.database_id = @TargetDatabaseId
    AND us.object_id = i.object_id
    AND us.index_id = i.index_id
-LEFT JOIN IndexSizes AS sz
-    ON sz.object_id = i.object_id
-   AND sz.index_id = i.index_id
+LEFT JOIN IndexMetrics AS im
+    ON im.object_id = i.object_id
+   AND im.index_id = i.index_id
 WHERE o.type = ''U''
   AND s.name LIKE @SchemaFilter
   AND o.name LIKE @TableFilter
@@ -223,6 +227,7 @@ INSERT INTO dbo.IndexAnalysis
     UserUpdates,
     TotalReads,
     ReadWriteRatio,
+    RecordCount,
     SizeMB,
     LastUserSeek,
     LastUserScan,
@@ -252,6 +257,7 @@ SELECT
     u.UserUpdates,
     u.TotalReads,
     u.ReadWriteNumeric,
+    u.RecordCount,
     u.SizeMB,
     u.LastUserSeek,
     u.LastUserScan,
