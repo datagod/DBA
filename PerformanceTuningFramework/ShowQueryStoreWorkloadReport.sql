@@ -59,6 +59,7 @@ DECLARE
     @LineNo             int,
     @SortByUpper        varchar(12),
     @DatabaseName       sysname,
+    @DatabaseId         int,
     @QueryStoreState    nvarchar(60),
     @Sql                nvarchar(max),
     @DatabasesScanned   int,
@@ -201,11 +202,11 @@ BEGIN
            SET QueryStoreState = @QueryStoreState
          WHERE DatabaseName = @DatabaseName
 
-        IF @QueryStoreState NOT IN (''READ_WRITE'', ''READ_ONLY'')
+        IF @QueryStoreState NOT IN ('READ_WRITE', 'READ_ONLY')
         BEGIN
             UPDATE #DatabaseScan
-               SET ScanStatus = ''SKIPPED'',
-                   Note = ''Query Store state is not readable''
+               SET ScanStatus = 'SKIPPED',
+                   Note = 'Query Store state is not readable'
              WHERE DatabaseName = @DatabaseName
         END
         ELSE IF EXISTS (
@@ -216,12 +217,14 @@ BEGIN
         )
         BEGIN
             UPDATE #DatabaseScan
-               SET ScanStatus = ''SKIPPED'',
-                   Note = ''Compatibility level below 130''
+               SET ScanStatus = 'SKIPPED',
+                   Note = 'Compatibility level below 130'
              WHERE DatabaseName = @DatabaseName
         END
         ELSE
         BEGIN
+            SET @DatabaseId = DB_ID(@DatabaseName)
+
             SET @Sql = N'
             ;WITH QueryActivity AS
             (
@@ -293,8 +296,7 @@ BEGIN
                     END,
                     WorkloadName = CASE
                         WHEN qa.object_id <> 0 THEN
-                            ISNULL(OBJECT_SCHEMA_NAME(qa.object_id, DB_ID(''' + REPLACE(@DatabaseName, '''', '''''') + N''')) + ''.''
-                                + OBJECT_NAME(qa.object_id, DB_ID(''' + REPLACE(@DatabaseName, '''', '''''') + N''')), ''(unknown object)'')
+                            ISNULL(OBJECT_SCHEMA_NAME(qa.object_id, @DbId) + ''.'' + OBJECT_NAME(qa.object_id, @DbId), ''(unknown object)'')
                         ELSE LEFT(
                             REPLACE(REPLACE(REPLACE(qa.query_sql_text, CHAR(13), '' ''), CHAR(10), '' ''), ''  '', '' ''),
                             200)
@@ -320,7 +322,7 @@ BEGIN
                 SortKeyText
             )
             SELECT
-                DatabaseName = ''' + REPLACE(@DatabaseName, '''', '''''') + N''',
+                DatabaseName = @DbName,
                 c.WorkloadType,
                 WorkloadName = MIN(c.WorkloadName),
                 QueryCount = COUNT(DISTINCT c.query_id),
@@ -330,14 +332,16 @@ BEGIN
                 LastExecutionTime = MAX(c.LastExecutionTime),
                 SortKeyBigint = SUM(c.Executions),
                 SortKeyDate = MAX(c.LastExecutionTime),
-                SortKeyText = ''' + REPLACE(@DatabaseName, '''', '''''') + N'''
+                SortKeyText = @DbName
             FROM Classified AS c
             GROUP BY c.WorkloadType, c.GroupKey
             HAVING SUM(c.Executions) >= @MinExecutions'
 
             EXEC sys.sp_executesql
                 @Sql,
-                N'@CutoffTime datetime, @MinExecutions bigint',
+                N'@DbId int, @DbName sysname, @CutoffTime datetime, @MinExecutions bigint',
+                @DbId = @DatabaseId,
+                @DbName = @DatabaseName,
                 @CutoffTime = @CutoffTime,
                 @MinExecutions = @MinExecutions
 
