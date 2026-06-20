@@ -245,11 +245,18 @@ OUTER APPLY (
      ORDER BY r.cpu_time DESC, r.request_id DESC
 ) AS r
 OUTER APPLY (
-    SELECT phys_io = SUM(c.num_reads + c.num_writes)
+    SELECT TOP (1)
+        phys_io = (
+            SELECT SUM(c2.num_reads + c2.num_writes)
+              FROM sys.dm_exec_connections AS c2
+             WHERE c2.session_id = s.session_id
+        ),
+        c.most_recent_sql_handle
       FROM sys.dm_exec_connections AS c
      WHERE c.session_id = s.session_id
+     ORDER BY c.connect_time DESC
 ) AS conn
-OUTER APPLY sys.dm_exec_sql_text(COALESCE(r.sql_handle, s.most_recent_sql_handle)) AS st
+OUTER APPLY sys.dm_exec_sql_text(COALESCE(r.sql_handle, conn.most_recent_sql_handle)) AS st
 OUTER APPLY sys.dm_exec_input_buffer(s.session_id, ISNULL(r.request_id, 0)) AS ib
 
 INSERT INTO #PendingIO
