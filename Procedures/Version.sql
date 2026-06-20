@@ -1,4 +1,4 @@
-USE dba
+
 GO
 
 /*
@@ -272,3 +272,5 @@ IF OBJECT_ID('dbo.Version') IS NOT NULL
 ELSE
     PRINT 'Procedure Version NOT created.'
 GO
+
+exec Version
