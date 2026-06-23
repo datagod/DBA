@@ -122,6 +122,48 @@ Deployment:
 EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @Run1, @AnalysisRunID_B = @Run2
 ```
 
+### ExamineHeapTables
+
+File: `ExamineHeapTables.sql`
+
+Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap.
+
+- Identifies tables without a clustered rowstore or columnstore index
+- Reports heap usage from `sys.dm_db_index_usage_stats` (seeks, scans, lookups, updates)
+- Reports forwarded records, fragmentation, size, and nonclustered index count from `sys.dm_db_index_physical_stats`
+- Ranks missing-index signals from `sys.dm_db_missing_index_*` per heap
+- Considers existing nonclustered primary keys, most-used nonclustered indexes, identity columns, and narrow-key heuristics
+- Returns a recommendation score, rationale, `SuggestedClusteredDdl`, and optional `SuggestedNonClusteredDdl` when missing-index columns differ from the clustered recommendation
+
+Deployment:
+
+```sql
+-- Run ExamineHeapTables.sql in the tool database
+EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase'
+EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase', @SortBy = 'SCANS', @MinPageCount = 1000
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to examine (default: current database)
+- `@SchemaFilter` — schema name filter (default `%`)
+- `@TableFilter` — table name filter (default `%`)
+- `@MinPageCount` — minimum heap page count to include (default `100`)
+- `@TopN` — maximum heap rows returned in the detail result set (default `100`)
+- `@SortBy` — `SCORE`, `SIZE`, `SCANS`, `UPDATES`, `IMPACT`, or `OBJECT` (default `SCORE`)
+- `@ReturnResultSets` — return summary and detail result sets (default `1`)
+
+Recommendation priority:
+
+1. Nonclustered primary key columns (cluster the PK)
+2. High-impact missing-index equality/inequality columns
+3. Key columns from the most-used nonclustered index
+4. Lower-impact missing-index columns
+5. Identity column
+6. Heuristic narrow key column
+
+Note: usage statistics reset when the SQL Server instance restarts. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
+
 ### AnalyzeIndexes
 
 File: `AnalyzeIndexes.sql`
