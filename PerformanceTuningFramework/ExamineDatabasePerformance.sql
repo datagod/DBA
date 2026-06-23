@@ -143,7 +143,7 @@ SELECT 'SERVER', 'Scheduler_Count', CAST(COUNT(*) AS nvarchar(20)), COUNT(*)
   FROM sys.dm_os_schedulers
  WHERE is_online = 1
 UNION ALL
-SELECT 'SERVER', 'MaxWorkerThreads', CAST(c.max_worker_count AS nvarchar(20)), c.max_worker_count
+SELECT 'SERVER', 'MaxWorkerThreads', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
   FROM sys.configurations AS c
  WHERE c.name = 'max worker threads'
 UNION ALL
@@ -734,7 +734,7 @@ SELECT
           MetricNumeric = CAST(qs.total_worker_time / 1000.0 AS decimal(18, 4))
         FROM sys.dm_exec_query_stats AS qs
        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS st
-       WHERE qs.database_id = @TargetDatabaseId
+       WHERE ISNULL(st.dbid, @TargetDatabaseId) = @TargetDatabaseId
   ) AS x
  WHERE x.RankOrder <= @TopN
 
@@ -763,7 +763,7 @@ SELECT
           MetricNumeric = CAST(qs.total_elapsed_time / 1000.0 AS decimal(18, 4))
         FROM sys.dm_exec_query_stats AS qs
        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS st
-       WHERE qs.database_id = @TargetDatabaseId
+       WHERE ISNULL(st.dbid, @TargetDatabaseId) = @TargetDatabaseId
   ) AS x
  WHERE x.RankOrder <= @TopN
 
@@ -792,7 +792,7 @@ SELECT
           MetricNumeric = CAST(qs.total_logical_reads AS decimal(18, 4))
         FROM sys.dm_exec_query_stats AS qs
        CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) AS st
-       WHERE qs.database_id = @TargetDatabaseId
+       WHERE ISNULL(st.dbid, @TargetDatabaseId) = @TargetDatabaseId
   ) AS x
  WHERE x.RankOrder <= @TopN
 
@@ -802,37 +802,62 @@ SELECT
 IF OBJECT_ID('tempdb..#DbccLogInfo') IS NOT NULL
     DROP TABLE #DbccLogInfo
 
+/*
+    DBCC LOGINFO returns a different column list on SQL Server 2008/2008 R2
+    than it does on SQL Server 2012+.
+
+    Do not create #DbccLogInfo separately inside IF/ELSE branches. SQL Server
+    performs compile-time name resolution for local temporary tables within the
+    procedure scope, so two CREATE TABLE #DbccLogInfo statements can raise:
+
+        There is already an object named '#DbccLogInfo' in the database.
+
+    Use one superset temp-table definition, then insert into the matching column
+    list for the detected SQL Server version.
+*/
+CREATE TABLE #DbccLogInfo
+(
+    RecoveryUnitId int            NULL,
+    FileId         smallint       NULL,
+    FileSize       bigint         NULL,
+    StartOffset    bigint         NULL,
+    FSeqNo         int            NULL,
+    Status         tinyint        NULL,
+    Parity         tinyint        NULL,
+    CreateLSN      numeric(25, 0) NULL
+)
+
+SET @Sql = N'DBCC LOGINFO(' + @QuotedDatabase + N') WITH NO_INFOMSGS'
+
 IF @MajorVersion < 11
 BEGIN
-    CREATE TABLE #DbccLogInfo
+    INSERT INTO #DbccLogInfo
     (
-        FileId      smallint       NULL,
-        FileSize    bigint         NULL,
-        StartOffset bigint         NULL,
-        FSeqNo      int            NULL,
-        Status      tinyint        NULL,
-        Parity      tinyint        NULL,
-        CreateLSN   numeric(25, 0) NULL
+        FileId,
+        FileSize,
+        StartOffset,
+        FSeqNo,
+        Status,
+        Parity,
+        CreateLSN
     )
+    EXEC (@Sql)
 END
 ELSE
 BEGIN
-    CREATE TABLE #DbccLogInfo
+    INSERT INTO #DbccLogInfo
     (
-        RecoveryUnitId int            NULL,
-        FileId         smallint       NULL,
-        FileSize       bigint         NULL,
-        StartOffset    bigint         NULL,
-        FSeqNo         int            NULL,
-        Status         tinyint        NULL,
-        Parity         tinyint        NULL,
-        CreateLSN      numeric(25, 0) NULL
+        RecoveryUnitId,
+        FileId,
+        FileSize,
+        StartOffset,
+        FSeqNo,
+        Status,
+        Parity,
+        CreateLSN
     )
+    EXEC (@Sql)
 END
-
-SET @Sql = N'DBCC LOGINFO(' + @QuotedDatabase + N') WITH NO_INFOMSGS'
-INSERT INTO #DbccLogInfo
-EXEC (@Sql)
 
 SET @VLFCount = @@ROWCOUNT
 
