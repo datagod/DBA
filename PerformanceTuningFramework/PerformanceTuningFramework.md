@@ -35,6 +35,7 @@ Persistent storage for index usage analysis results. Deploy to the tool database
 - One row per index per execution
 - Grouped by `AnalysisRunID` and `CaptureDate` for each run
 - Stores target database name, schema, table, index identity, usage counts, record count, size, last-used timestamps, and run filters
+- Stores index definition metadata: key columns with sort order (`KeyColumns`), included columns (`IncludedColumns`), filtered-index predicate (`FilterDefinition`), partition compression (`CompressionDesc`), and flags for unique, primary key, and fill factor
 - Indexed on `AnalysisRunID` and `(DatabaseName, CaptureDate)`
 
 Deployment:
@@ -53,6 +54,7 @@ Stored procedure that captures index usage statistics from a target database and
 
 - Reads catalog metadata from the target database via three-part names
 - Joins instance-wide `sys.dm_db_index_usage_stats` filtered to the target database
+- Captures key and included column lists, ASC/DESC sort order, filter definitions, compression, uniqueness, primary-key status, and fill factor from target-database catalog views
 - Inserts one row per index into `IndexAnalysis`
 - Returns a single-row summary with `AnalysisRunID`, counts, and run parameters
 
@@ -127,6 +129,18 @@ SELECT SchemaName, TableName, IndexName, UserUpdates, SizeMB
  WHERE TotalReads = 0
    AND UserUpdates > 0
  ORDER BY UserUpdates DESC
+
+-- Index definitions for the latest run
+SELECT SchemaName, TableName, IndexName, KeyColumns, IncludedColumns,
+       FilterDefinition, CompressionDesc, IsUnique, IsPrimaryKey, FillFactor
+  FROM dbo.IndexAnalysis
+ WHERE DatabaseName = N'YourDatabase'
+   AND AnalysisRunID = (
+       SELECT TOP 1 AnalysisRunID
+         FROM dbo.IndexAnalysis
+        WHERE DatabaseName = N'YourDatabase'
+        ORDER BY CaptureDate DESC)
+ ORDER BY SchemaName, TableName, IndexName
 ```
 
 Note: usage statistics reset when the SQL Server instance restarts. Indexes with no row in `sys.dm_db_index_usage_stats` have had no recorded activity since the restart.

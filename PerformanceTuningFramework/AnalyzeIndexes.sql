@@ -51,7 +51,8 @@ DECLARE
     @UnusedIndexes       int,
     @WriteHeavyIndexes   int,
     @DisabledIndexes     int,
-    @NeverSampled        int
+    @NeverSampled        int,
+    @CompressionCte      nvarchar(max)
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
@@ -83,6 +84,31 @@ SET @ServerName    = CAST(SERVERPROPERTY('MachineName') AS sysname)
 SET @AnalysisRunID = NEWID()
 SET @CaptureDate   = GETDATE()
 
+IF @MajorVersion >= 10
+    SET @CompressionCte = N'
+IndexCompression AS
+(
+    SELECT
+        p.object_id,
+        p.index_id,
+        CompressionDesc = CASE
+            WHEN MIN(p.data_compression_desc) = MAX(p.data_compression_desc) THEN MIN(p.data_compression_desc)
+            ELSE ''MULTIPLE''
+        END
+    FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.partitions AS p
+    GROUP BY p.object_id, p.index_id
+),'
+ELSE
+    SET @CompressionCte = N'
+IndexCompression AS
+(
+    SELECT
+        object_id = CAST(NULL AS int),
+        index_id = CAST(NULL AS int),
+        CompressionDesc = CAST(NULL AS nvarchar(60))
+    WHERE 1 = 0
+),'
+
 IF OBJECT_ID('tempdb..#IndexUsage') IS NOT NULL
     DROP TABLE #IndexUsage
 
@@ -108,11 +134,73 @@ CREATE TABLE #IndexUsage
     LastUserUpdate   datetime        NULL,
     IsDisabled       bit             NOT NULL,
     HasUsageStats    bit             NOT NULL,
-    IsFiltered       bit             NOT NULL
+    IsFiltered       bit             NOT NULL,
+    IsUnique         bit             NOT NULL,
+    IsPrimaryKey     bit             NOT NULL,
+    FillFactor       tinyint         NULL,
+    KeyColumns       nvarchar(2000)  NULL,
+    IncludedColumns  nvarchar(2000)  NULL,
+    FilterDefinition nvarchar(max)   NULL,
+    CompressionDesc  nvarchar(60)    NULL
 )
 
 SET @Sql = N'
-;WITH IndexMetrics AS
+;WITH IndexColumnDefs AS
+(
+    SELECT
+        ic.object_id,
+        ic.index_id,
+        ic.is_included_column,
+        ic.key_ordinal,
+        ic.index_column_id,
+        ic.is_descending_key,
+        ColumnName = c.name
+    FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.index_columns AS ic
+    INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.columns AS c
+        ON c.object_id = ic.object_id
+       AND c.column_id = ic.column_id
+),
+KeyColumnList AS
+(
+    SELECT
+        icd.object_id,
+        icd.index_id,
+        KeyColumns = STUFF((
+            SELECT '', '' + icd2.ColumnName
+                + CASE WHEN icd2.is_descending_key = 1 THEN '' DESC'' ELSE '' ASC'' END
+            FROM IndexColumnDefs AS icd2
+            WHERE icd2.object_id = icd.object_id
+              AND icd2.index_id = icd.index_id
+              AND icd2.is_included_column = 0
+              AND icd2.key_ordinal > 0
+            ORDER BY icd2.key_ordinal
+            FOR XML PATH(''''), TYPE
+        ).value(''.'', ''nvarchar(max)''), 1, 2, '''')
+    FROM IndexColumnDefs AS icd
+    WHERE icd.is_included_column = 0
+      AND icd.key_ordinal > 0
+    GROUP BY icd.object_id, icd.index_id
+),
+IncludedColumnList AS
+(
+    SELECT
+        icd.object_id,
+        icd.index_id,
+        IncludedColumns = STUFF((
+            SELECT '', '' + icd2.ColumnName
+            FROM IndexColumnDefs AS icd2
+            WHERE icd2.object_id = icd.object_id
+              AND icd2.index_id = icd.index_id
+              AND icd2.is_included_column = 1
+            ORDER BY icd2.index_column_id
+            FOR XML PATH(''''), TYPE
+        ).value(''.'', ''nvarchar(max)''), 1, 2, '''')
+    FROM IndexColumnDefs AS icd
+    WHERE icd.is_included_column = 1
+    GROUP BY icd.object_id, icd.index_id
+),
+' + @CompressionCte + N'
+IndexMetrics AS
 (
     SELECT
         p.object_id,
@@ -146,7 +234,14 @@ INSERT INTO #IndexUsage
     LastUserUpdate,
     IsDisabled,
     HasUsageStats,
-    IsFiltered
+    IsFiltered,
+    IsUnique,
+    IsPrimaryKey,
+    FillFactor,
+    KeyColumns,
+    IncludedColumns,
+    FilterDefinition,
+    CompressionDesc
 )
 SELECT
     SchemaName = s.name,
@@ -180,7 +275,20 @@ SELECT
     LastUserUpdate = us.last_user_update,
     IsDisabled = ISNULL(i.is_disabled, 0),
     HasUsageStats = CASE WHEN us.database_id IS NULL THEN 0 ELSE 1 END,
-    IsFiltered = CASE WHEN @MajorVersion >= 10 AND ISNULL(i.has_filter, 0) = 1 THEN 1 ELSE 0 END
+    IsFiltered = CASE WHEN @MajorVersion >= 10 AND ISNULL(i.has_filter, 0) = 1 THEN 1 ELSE 0 END,
+    IsUnique = ISNULL(i.is_unique, 0),
+    IsPrimaryKey = ISNULL(i.is_primary_key, 0),
+    FillFactor = CASE WHEN i.index_id = 0 THEN NULL ELSE i.fill_factor END,
+    KeyColumns = kcl.KeyColumns,
+    IncludedColumns = icl.IncludedColumns,
+    FilterDefinition = CASE
+                           WHEN @MajorVersion >= 10 AND ISNULL(i.has_filter, 0) = 1 THEN i.filter_definition
+                           ELSE NULL
+                       END,
+    CompressionDesc = CASE
+                          WHEN @MajorVersion >= 10 THEN ISNULL(icomp.CompressionDesc, ''NONE'')
+                          ELSE NULL
+                      END
 FROM ' + QUOTENAME(@TargetDatabase) + N'.sys.objects AS o
 INNER JOIN ' + QUOTENAME(@TargetDatabase) + N'.sys.schemas AS s
     ON s.schema_id = o.schema_id
@@ -193,6 +301,15 @@ LEFT JOIN sys.dm_db_index_usage_stats AS us
 LEFT JOIN IndexMetrics AS im
     ON im.object_id = i.object_id
    AND im.index_id = i.index_id
+LEFT JOIN KeyColumnList AS kcl
+    ON kcl.object_id = i.object_id
+   AND kcl.index_id = i.index_id
+LEFT JOIN IncludedColumnList AS icl
+    ON icl.object_id = i.object_id
+   AND icl.index_id = i.index_id
+LEFT JOIN IndexCompression AS icomp
+    ON icomp.object_id = i.object_id
+   AND icomp.index_id = i.index_id
 WHERE o.type = ''U''
   AND s.name LIKE @SchemaFilter
   AND o.name LIKE @TableFilter
@@ -236,6 +353,13 @@ INSERT INTO dbo.IndexAnalysis
     IsDisabled,
     HasUsageStats,
     IsFiltered,
+    IsUnique,
+    IsPrimaryKey,
+    FillFactor,
+    KeyColumns,
+    IncludedColumns,
+    FilterDefinition,
+    CompressionDesc,
     FilterSchema,
     FilterTable,
     SortBy
@@ -266,6 +390,13 @@ SELECT
     u.IsDisabled,
     u.HasUsageStats,
     u.IsFiltered,
+    u.IsUnique,
+    u.IsPrimaryKey,
+    u.FillFactor,
+    u.KeyColumns,
+    u.IncludedColumns,
+    u.FilterDefinition,
+    u.CompressionDesc,
     @SchemaFilter,
     @TableFilter,
     @SortByUpper

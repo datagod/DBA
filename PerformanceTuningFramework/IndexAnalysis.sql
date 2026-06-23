@@ -49,6 +49,13 @@ CREATE TABLE dbo.IndexAnalysis
     IsDisabled        bit              NOT NULL,
     HasUsageStats     bit              NOT NULL,
     IsFiltered        bit              NOT NULL,
+    IsUnique          bit              NOT NULL,
+    IsPrimaryKey      bit              NOT NULL,
+    FillFactor        tinyint          NULL,
+    KeyColumns        nvarchar(2000)   NULL,
+    IncludedColumns   nvarchar(2000)   NULL,
+    FilterDefinition  nvarchar(max)    NULL,
+    CompressionDesc   nvarchar(60)     NULL,
     FilterSchema      sysname          NOT NULL,
     FilterTable       sysname          NOT NULL,
     SortBy            varchar(10)      NOT NULL
