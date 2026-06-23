@@ -1,5 +1,4 @@
-
-
+use dbatools
 /*
   AnalyzeIndexes.sql
   Performance Tuning Framework
@@ -137,7 +136,7 @@ CREATE TABLE #IndexUsage
     IsFiltered       bit             NOT NULL,
     IsUnique         bit             NOT NULL,
     IsPrimaryKey     bit             NOT NULL,
-    FillFactor       tinyint         NULL,
+    [FillFactor]     tinyint         NULL,
     KeyColumns       nvarchar(2000)  NULL,
     IncludedColumns  nvarchar(2000)  NULL,
     FilterDefinition nvarchar(max)   NULL,
@@ -237,7 +236,7 @@ INSERT INTO #IndexUsage
     IsFiltered,
     IsUnique,
     IsPrimaryKey,
-    FillFactor,
+    [FillFactor],
     KeyColumns,
     IncludedColumns,
     FilterDefinition,
@@ -278,7 +277,7 @@ SELECT
     IsFiltered = CASE WHEN @MajorVersion >= 10 AND ISNULL(i.has_filter, 0) = 1 THEN 1 ELSE 0 END,
     IsUnique = ISNULL(i.is_unique, 0),
     IsPrimaryKey = ISNULL(i.is_primary_key, 0),
-    FillFactor = CASE WHEN i.index_id = 0 THEN NULL ELSE i.fill_factor END,
+    [FillFactor] = CASE WHEN i.index_id = 0 THEN NULL ELSE i.fill_factor END,
     KeyColumns = kcl.KeyColumns,
     IncludedColumns = icl.IncludedColumns,
     FilterDefinition = CASE
@@ -355,7 +354,7 @@ INSERT INTO dbo.IndexAnalysis
     IsFiltered,
     IsUnique,
     IsPrimaryKey,
-    FillFactor,
+    [FillFactor],
     KeyColumns,
     IncludedColumns,
     FilterDefinition,
@@ -392,7 +391,7 @@ SELECT
     u.IsFiltered,
     u.IsUnique,
     u.IsPrimaryKey,
-    u.FillFactor,
+    u.[FillFactor],
     u.KeyColumns,
     u.IncludedColumns,
     u.FilterDefinition,

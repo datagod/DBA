@@ -1,3 +1,4 @@
+
 /*
   IndexAnalysis.sql
   Performance Tuning Framework
@@ -51,7 +52,7 @@ CREATE TABLE dbo.IndexAnalysis
     IsFiltered        bit              NOT NULL,
     IsUnique          bit              NOT NULL,
     IsPrimaryKey      bit              NOT NULL,
-    FillFactor        tinyint          NULL,
+    [FillFactor]      tinyint          NULL,
     KeyColumns        nvarchar(2000)   NULL,
     IncludedColumns   nvarchar(2000)   NULL,
     FilterDefinition  nvarchar(max)    NULL,
