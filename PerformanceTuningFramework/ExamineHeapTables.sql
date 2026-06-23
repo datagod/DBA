@@ -3,6 +3,8 @@
   ExamineHeapTables.sql
   Performance Tuning Framework
 
+  Requires SQL Server 2008 (10.x) or later. Target database compatibility level 100+.
+
   Deploy to the tool database, then execute:
     EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase'
 
@@ -14,7 +16,17 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-CREATE OR ALTER PROCEDURE dbo.ExamineHeapTables
+IF OBJECT_ID('dbo.ExamineHeapTables') IS NOT NULL
+BEGIN
+    PRINT 'Dropping: ExamineHeapTables'
+    DROP PROCEDURE dbo.ExamineHeapTables
+END
+GO
+
+PRINT 'Creating: ExamineHeapTables'
+GO
+
+CREATE PROCEDURE dbo.ExamineHeapTables
 (
     @TargetDatabase   sysname      = NULL,
     @SchemaFilter     sysname      = '%',
@@ -30,19 +42,27 @@ AS
 -- Author:       Bill McEvoy
 -- Description:  Identifies heap tables in a target database, analyzes DMV usage patterns and
 --               missing-index signals, and recommends a strong clustered index for each heap.
+--               Version-aware for SQL Server 2008+ instances and compatibility level 100+ databases.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
 DECLARE
-    @MajorVersion     tinyint,
-    @ServerName       sysname,
-    @TargetDatabaseId int,
-    @QuotedDatabase   nvarchar(260),
-    @Sql              nvarchar(max),
-    @SortByUpper      varchar(10),
-    @HeapCount        int,
-    @HighPriority     int,
-    @CaptureDate      datetime
+    @MajorVersion        tinyint,
+    @EngineEdition       int,
+    @CompatibilityLevel  int,
+    @ServerName          sysname,
+    @TargetDatabaseId    int,
+    @QuotedDatabase      nvarchar(260),
+    @Sql                 nvarchar(max),
+    @ClusteredTypeFilter nvarchar(40),
+    @IndexWithOptions    nvarchar(200),
+    @IndexWithOptionsNC  nvarchar(200),
+    @HeuristicTypeOrder  nvarchar(max),
+    @SparseFilter        nvarchar(100),
+    @SortByUpper         varchar(10),
+    @HeapCount           int,
+    @HighPriority        int,
+    @CaptureDate         datetime
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
@@ -70,9 +90,44 @@ SET @MajorVersion = CONVERT(tinyint,
     LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
          NULLIF(CHARINDEX('.', CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))), 0) - 1))
 
-SET @ServerName  = CAST(SERVERPROPERTY('MachineName') AS sysname)
-                  + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
-SET @CaptureDate = GETDATE()
+IF @MajorVersion < 10
+BEGIN
+    RAISERROR('ExamineHeapTables requires SQL Server 2008 (10.x) or later. This instance is version %d.', 16, 1, @MajorVersion)
+    RETURN
+END
+
+SELECT @CompatibilityLevel = d.compatibility_level
+  FROM sys.databases AS d
+ WHERE d.database_id = @TargetDatabaseId
+
+IF ISNULL(@CompatibilityLevel, 0) < 100
+BEGIN
+    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, ISNULL(@CompatibilityLevel, 0))
+    RETURN
+END
+
+SET @EngineEdition = CAST(SERVERPROPERTY('EngineEdition') AS int)
+SET @ServerName    = CAST(SERVERPROPERTY('MachineName') AS sysname)
+                     + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
+SET @CaptureDate   = GETDATE()
+
+IF @MajorVersion >= 11
+    SET @ClusteredTypeFilter = N'ci.type IN (1, 5)'
+ELSE
+    SET @ClusteredTypeFilter = N'ci.type = 1'
+
+IF @MajorVersion >= 10 AND @EngineEdition IN (3, 5)
+    SET @IndexWithOptions = N'ONLINE = ON, SORT_IN_TEMPDB = ON'
+ELSE
+    SET @IndexWithOptions = N'SORT_IN_TEMPDB = ON'
+
+SET @IndexWithOptionsNC = @IndexWithOptions
+
+SET @SparseFilter = N'AND c.is_sparse = 0'
+SET @HeuristicTypeOrder = N'
+                          WHEN ''date'' THEN 5
+                          WHEN ''datetime'' THEN 6
+                          WHEN ''datetime2'' THEN 7'
 
 IF OBJECT_ID('tempdb..#HeapAnalysis') IS NOT NULL
     DROP TABLE #HeapAnalysis
@@ -136,7 +191,7 @@ SET @Sql = N'
              FROM ' + @QuotedDatabase + N'.sys.indexes AS ci
             WHERE ci.object_id = o.object_id
               AND ci.index_id > 0
-              AND ci.type IN (1, 5)
+              AND ' + @ClusteredTypeFilter + N'
        )
 ),
 HeapPhysical AS
@@ -306,10 +361,7 @@ HeuristicColumn AS
                           WHEN ''tinyint'' THEN 1
                           WHEN ''smallint'' THEN 2
                           WHEN ''int'' THEN 3
-                          WHEN ''bigint'' THEN 4
-                          WHEN ''date'' THEN 5
-                          WHEN ''datetime'' THEN 6
-                          WHEN ''datetime2'' THEN 7
+                          WHEN ''bigint'' THEN 4' + @HeuristicTypeOrder + N'
                           ELSE 100
                       END,
                       c.column_id
@@ -320,7 +372,7 @@ HeuristicColumn AS
            INNER JOIN ' + @QuotedDatabase + N'.sys.types AS t
               ON t.user_type_id = c.user_type_id
            WHERE c.is_computed = 0
-             AND c.is_sparse = 0
+             ' + @SparseFilter + N'
              AND t.name NOT IN (''text'', ''ntext'', ''image'', ''xml'', ''varchar'', ''nvarchar'', ''varbinary'')
       ) AS x
      WHERE x.rn = 1
@@ -507,11 +559,11 @@ SELECT
               WHEN s.PrimaryKeyColumns IS NOT NULL AND s.PrimaryKeyIsUnique = 1 THEN
                   ''CREATE UNIQUE CLUSTERED INDEX '' + QUOTENAME(''CX_'' + s.TableName)
                   + '' ON '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
-                  + '' ('' + s.SuggestedKeyColumns + '') WITH (ONLINE = ON, SORT_IN_TEMPDB = ON);''
+                  + '' ('' + s.SuggestedKeyColumns + '') WITH ('' + @IndexWithOptions + '');''
               ELSE
                   ''CREATE CLUSTERED INDEX '' + QUOTENAME(''CX_'' + s.TableName)
                   + '' ON '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
-                  + '' ('' + s.SuggestedKeyColumns + '') WITH (ONLINE = ON, SORT_IN_TEMPDB = ON, FILLFACTOR = 90);''
+                  + '' ('' + s.SuggestedKeyColumns + '') WITH ('' + @IndexWithOptions + '', FILLFACTOR = 90);''
           END,
     SuggestedNonClusteredDdl =
           CASE
@@ -529,7 +581,7 @@ SELECT
                                THEN '' INCLUDE ('' + s.MissingIndexIncludedCols + '')''
                            ELSE ''''
                        END
-                     + '' WITH (ONLINE = ON, SORT_IN_TEMPDB = ON);''
+                     + '' WITH ('' + @IndexWithOptionsNC + '');''
               ELSE NULL
           END
   FROM Scored AS s'
@@ -540,12 +592,16 @@ EXEC sys.sp_executesql
       @SchemaFilter sysname,
       @TableFilter sysname,
       @MinPageCount int,
-      @SortByUpper varchar(10)',
+      @SortByUpper varchar(10),
+      @IndexWithOptions nvarchar(200),
+      @IndexWithOptionsNC nvarchar(200)',
     @TargetDatabaseId = @TargetDatabaseId,
     @SchemaFilter = @SchemaFilter,
     @TableFilter = @TableFilter,
     @MinPageCount = @MinPageCount,
-    @SortByUpper = @SortByUpper
+    @SortByUpper = @SortByUpper,
+    @IndexWithOptions = @IndexWithOptions,
+    @IndexWithOptionsNC = @IndexWithOptionsNC
 
 SELECT
     @HeapCount = COUNT(*),
@@ -566,7 +622,9 @@ BEGIN
         TopN = @TopN,
         SortBy = @SortByUpper,
         SqlMajorVersion = @MajorVersion,
-        Note = 'Usage stats are since instance restart. Review SuggestedClusteredDdl and test during a maintenance window.'
+        CompatibilityLevel = @CompatibilityLevel,
+        IndexWithOptions = @IndexWithOptions,
+        Note = 'Usage stats are since instance restart. ONLINE index option appears only on Enterprise/Developer. Review SuggestedClusteredDdl and test during a maintenance window.'
 
     SELECT TOP (@TopN)
         SchemaName,
@@ -601,4 +659,10 @@ BEGIN
      ORDER BY SortKey DESC, SchemaName, TableName
 END
 
+GO
+
+IF OBJECT_ID('dbo.ExamineHeapTables') IS NOT NULL
+    PRINT 'Procedure created.'
+ELSE
+    PRINT 'Procedure NOT created.'
 GO

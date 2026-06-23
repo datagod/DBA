@@ -126,7 +126,7 @@ EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @Run1, @AnalysisRunID_B =
 
 File: `ExamineHeapTables.sql`
 
-Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap.
+Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database.
 
 - Identifies tables without a clustered rowstore or columnstore index
 - Reports heap usage from `sys.dm_db_index_usage_stats` (seeks, scans, lookups, updates)
@@ -162,7 +162,7 @@ Recommendation priority:
 5. Identity column
 6. Heuristic narrow key column
 
-Note: usage statistics reset when the SQL Server instance restarts. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
+Note: usage statistics reset when the SQL Server instance restarts. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer editions; other editions receive `SORT_IN_TEMPDB = ON` only. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
 
 ### AnalyzeIndexes
 
