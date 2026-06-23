@@ -26,6 +26,22 @@ Deployment:
 -- Run PerformanceTraceResults.sql in the tool database
 ```
 
+### DatabasePerformanceRun / Metric / Finding
+
+File: `DatabasePerformanceAnalysis.sql`
+
+Persistent storage for database performance diagnostics captured by `ExamineDatabasePerformance`.
+
+- `DatabasePerformanceRun` stores one row per examination with server, database, and capture parameters
+- `DatabasePerformanceMetric` stores comparable scalar metrics (server CPU/memory, database settings, summary counts)
+- `DatabasePerformanceFinding` stores ranked findings (fragmentation, missing indexes, stale statistics, top queries, waits, file I/O, VLF, blocking)
+
+Deployment:
+
+```sql
+-- Run DatabasePerformanceAnalysis.sql in the tool database
+```
+
 ### IndexAnalysis
 
 File: `IndexAnalysis.sql`
@@ -45,6 +61,66 @@ Deployment:
 ```
 
 ## Scripts
+
+### ExamineDatabasePerformance
+
+File: `ExamineDatabasePerformance.sql`
+
+Stored procedure that examines a target database for performance issues using DMVs and stores comparable results for side-by-side analysis.
+
+- Captures server hardware and configuration (CPU count, cores per socket, memory, MAXDOP, PLE, buffer cache hit ratio, worker threads)
+- Captures database configuration (recovery model, compatibility level, auto-stats settings, RCSI, Query Store state, file sizes, VLF count, last CHECKDB)
+- Reports file I/O latency from `sys.dm_io_virtual_file_stats`
+- Reports index fragmentation from `sys.dm_db_index_physical_stats`
+- Reports missing indexes from `sys.dm_db_missing_index_*`
+- Reports unused indexes from `sys.dm_db_index_usage_stats`
+- Reports stale statistics from `sys.dm_db_stats_properties`
+- Reports top instance wait types from `sys.dm_os_wait_stats`
+- Reports top queries by CPU, duration, and reads from `sys.dm_exec_query_stats`
+- Reports blocking sessions and open transactions at capture time
+- Returns three result sets (summary, metrics, findings) and optionally persists to `DatabasePerformanceRun`, `DatabasePerformanceMetric`, and `DatabasePerformanceFinding`
+
+Deployment:
+
+```sql
+-- 1. Run DatabasePerformanceAnalysis.sql in the tool database
+-- 2. Run ExamineDatabasePerformance.sql in the tool database
+DECLARE @FastRun uniqueidentifier, @SlowRun uniqueidentifier
+EXEC dbo.ExamineDatabasePerformance @TargetDatabase = N'FastDb', @AnalysisRunID = @FastRun OUTPUT
+EXEC dbo.ExamineDatabasePerformance @TargetDatabase = N'SlowDb', @AnalysisRunID = @SlowRun OUTPUT
+EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @FastRun, @AnalysisRunID_B = @SlowRun
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to examine (default: current database)
+- `@SchemaFilter` — schema name filter (default `%`)
+- `@TableFilter` — table name filter (default `%`)
+- `@TopN` — number of ranked rows kept per finding category (default `25`)
+- `@MinFragmentationPct` — minimum fragmentation percent to include (default `10`)
+- `@MinPageCount` — minimum page count for fragmentation findings (default `1000`)
+- `@PersistResults` — store results in `DatabasePerformance*` tables (default `1`)
+- `@ReturnResultSets` — return summary/metrics/findings result sets (default `1`)
+- `@AnalysisRunID` — OUTPUT unique identifier for the capture run
+
+Note: wait stats and plan-cache queries are instance-scoped; when comparing two databases on the same server, focus on database metrics, fragmentation, statistics, missing/unused indexes, and file I/O differences.
+
+### CompareDatabasePerformance
+
+File: `CompareDatabasePerformance.sql`
+
+Stored procedure that compares two `ExamineDatabasePerformance` capture runs.
+
+- Returns run header information (database names, capture dates, servers)
+- Returns metric differences with numeric deltas
+- Returns finding-count differences by category
+
+Deployment:
+
+```sql
+-- Run after DatabasePerformanceAnalysis.sql and ExamineDatabasePerformance.sql
+EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @Run1, @AnalysisRunID_B = @Run2
+```
 
 ### AnalyzeIndexes
 
