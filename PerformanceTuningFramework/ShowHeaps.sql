@@ -1,12 +1,12 @@
 
 /*
-  ExamineHeapTables.sql
+  ShowHeaps.sql
   Performance Tuning Framework
 
   Requires SQL Server 2008 (10.x) or later. Target database compatibility level 100+.
 
   Deploy to the tool database, then execute:
-    EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase'
+    EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
 
   Analyzes user-table heaps via DMVs and recommends a clustered index per table.
 */
@@ -16,17 +16,17 @@ GO
 SET QUOTED_IDENTIFIER ON
 GO
 
-IF OBJECT_ID('dbo.ExamineHeapTables') IS NOT NULL
+IF OBJECT_ID('dbo.ShowHeaps') IS NOT NULL
 BEGIN
-    PRINT 'Dropping: ExamineHeapTables'
-    DROP PROCEDURE dbo.ExamineHeapTables
+    PRINT 'Dropping: ShowHeaps'
+    DROP PROCEDURE dbo.ShowHeaps
 END
 GO
 
-PRINT 'Creating: ExamineHeapTables'
+PRINT 'Creating: ShowHeaps'
 GO
 
-CREATE PROCEDURE dbo.ExamineHeapTables
+CREATE PROCEDURE dbo.ShowHeaps
 (
     @TargetDatabase   sysname      = NULL,
     @SchemaFilter     sysname      = '%',
@@ -92,7 +92,7 @@ SET @MajorVersion = CONVERT(tinyint,
 
 IF @MajorVersion < 10
 BEGIN
-    RAISERROR('ExamineHeapTables requires SQL Server 2008 (10.x) or later. This instance is version %d.', 16, 1, @MajorVersion)
+    RAISERROR('ShowHeaps requires SQL Server 2008 (10.x) or later. This instance is version %d.', 16, 1, @MajorVersion)
     RETURN
 END
 
@@ -102,7 +102,7 @@ SELECT @CompatibilityLevel = d.compatibility_level
 
 IF ISNULL(@CompatibilityLevel, 0) < 100
 BEGIN
-    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, ISNULL(@CompatibilityLevel, 0))
+    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, @CompatibilityLevel)
     RETURN
 END
 
@@ -661,7 +661,7 @@ END
 
 GO
 
-IF OBJECT_ID('dbo.ExamineHeapTables') IS NOT NULL
+IF OBJECT_ID('dbo.ShowHeaps') IS NOT NULL
     PRINT 'Procedure created.'
 ELSE
     PRINT 'Procedure NOT created.'
