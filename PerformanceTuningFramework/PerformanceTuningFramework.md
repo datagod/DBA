@@ -126,7 +126,7 @@ EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @Run1, @AnalysisRunID_B =
 
 File: `ExamineHeapTables.sql`
 
-Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database.
+Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database. A SQL Server 2022 instance examining a compatibility level 100 database is supported; catalog and index-type logic follow the target compatibility level, while `ONLINE` index DDL follows the host instance edition.
 
 - Identifies tables without a clustered rowstore or columnstore index
 - Reports heap usage from `sys.dm_db_index_usage_stats` (seeks, scans, lookups, updates)
@@ -162,7 +162,7 @@ Recommendation priority:
 5. Identity column
 6. Heuristic narrow key column
 
-Note: usage statistics reset when the SQL Server instance restarts. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer editions; other editions receive `SORT_IN_TEMPDB = ON` only. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
+Note: usage statistics reset when the SQL Server instance restarts. When the host instance is newer than the target compatibility level (for example SQL Server 2022 with compatibility level 100), heap detection and recommendations honor the target database mode. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
 
 ### AnalyzeIndexes
 

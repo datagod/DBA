@@ -3,7 +3,9 @@
   ShowHeaps.sql
   Performance Tuning Framework
 
-  Requires SQL Server 2008 (10.x) or later. Target database compatibility level 100+.
+  Requires SQL Server 2008 (10.x) or later on the instance.
+  Target database compatibility level 100+ (SQL Server 2008 mode).
+  Supports newer instances (for example SQL Server 2022) examining older-compat databases.
 
   Deploy to the tool database, then execute:
     EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
@@ -42,12 +44,14 @@ AS
 -- Author:       Bill McEvoy
 -- Description:  Identifies heap tables in a target database, analyzes DMV usage patterns and
 --               missing-index signals, and recommends a strong clustered index for each heap.
---               Version-aware for SQL Server 2008+ instances and compatibility level 100+ databases.
+--               Version-aware: instance version controls ONLINE index DDL; target compatibility
+--               level controls database catalog and index-type logic.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
 DECLARE
     @MajorVersion        tinyint,
+    @TargetCompatMajor   tinyint,
     @EngineEdition       int,
     @CompatibilityLevel  int,
     @ServerName          sysname,
@@ -106,16 +110,20 @@ BEGIN
     RETURN
 END
 
+SET @TargetCompatMajor = CONVERT(tinyint, @CompatibilityLevel / 10)
+
 SET @EngineEdition = CAST(SERVERPROPERTY('EngineEdition') AS int)
 SET @ServerName    = CAST(SERVERPROPERTY('MachineName') AS sysname)
                      + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
 SET @CaptureDate   = GETDATE()
 
-IF @MajorVersion >= 11
+-- Target database compatibility drives catalog/index-type behavior.
+IF @CompatibilityLevel >= 110
     SET @ClusteredTypeFilter = N'ci.type IN (1, 5)'
 ELSE
     SET @ClusteredTypeFilter = N'ci.type = 1'
 
+-- Instance edition/version drives whether ONLINE rebuild is offered in suggested DDL.
 IF @MajorVersion >= 10 AND @EngineEdition IN (3, 5)
     SET @IndexWithOptions = N'ONLINE = ON, SORT_IN_TEMPDB = ON'
 ELSE
@@ -123,11 +131,20 @@ ELSE
 
 SET @IndexWithOptionsNC = @IndexWithOptions
 
-SET @SparseFilter = N'AND c.is_sparse = 0'
-SET @HeuristicTypeOrder = N'
+IF @CompatibilityLevel >= 100
+BEGIN
+    SET @SparseFilter = N'AND c.is_sparse = 0'
+    SET @HeuristicTypeOrder = N'
                           WHEN ''date'' THEN 5
                           WHEN ''datetime'' THEN 6
                           WHEN ''datetime2'' THEN 7'
+END
+ELSE
+BEGIN
+    SET @SparseFilter = N''
+    SET @HeuristicTypeOrder = N'
+                          WHEN ''datetime'' THEN 6'
+END
 
 IF OBJECT_ID('tempdb..#HeapAnalysis') IS NOT NULL
     DROP TABLE #HeapAnalysis
@@ -621,10 +638,11 @@ BEGIN
         MinPageCount = @MinPageCount,
         TopN = @TopN,
         SortBy = @SortByUpper,
-        SqlMajorVersion = @MajorVersion,
-        CompatibilityLevel = @CompatibilityLevel,
+        SqlInstanceMajorVersion = @MajorVersion,
+        TargetCompatibilityLevel = @CompatibilityLevel,
+        TargetCompatMajorVersion = @TargetCompatMajor,
         IndexWithOptions = @IndexWithOptions,
-        Note = 'Usage stats are since instance restart. ONLINE index option appears only on Enterprise/Developer. Review SuggestedClusteredDdl and test during a maintenance window.'
+        Note = 'Instance and target compatibility differ by design when a newer SQL Server hosts an older-compat database. Analysis uses target compatibility level; ONLINE DDL option uses instance edition. Usage stats are since instance restart.'
 
     SELECT TOP (@TopN)
         SchemaName,
