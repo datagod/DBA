@@ -122,9 +122,40 @@ Deployment:
 EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @Run1, @AnalysisRunID_B = @Run2
 ```
 
-### ExamineHeapTables
+### CheckForHeaps
 
-File: `ExamineHeapTables.sql`
+File: `CheckForHeaps.sql`
+
+Lightweight stored procedure that scans a target database for heap tables using catalog views only.
+
+- Finds user tables without a clustered rowstore or columnstore index
+- Reports row count and size from `sys.partitions` and `sys.allocation_units`
+- Reports nonclustered index count and primary-key presence from `sys.indexes`
+- Optionally includes heap scan/update counts from `sys.dm_db_index_usage_stats`
+- Does not call `sys.dm_db_index_physical_stats` or missing-index DMVs
+
+Deployment:
+
+```sql
+-- Run CheckForHeaps.sql in the tool database
+EXEC dbo.CheckForHeaps @TargetDatabase = N'YourDatabase'
+EXEC dbo.CheckForHeaps @TargetDatabase = N'YourDatabase', @MinRows = 1000, @SortBy = 'ROWS'
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to examine (default: current database)
+- `@SchemaFilter` — schema name filter (default `%`)
+- `@TableFilter` — table name filter (default `%`)
+- `@MinRows` — minimum row count to include (default `0`)
+- `@SortBy` — `SIZE`, `ROWS`, `NC`, `SCANS`, or `OBJECT` (default `SIZE`)
+- `@ReturnSummary` — return one-row summary result set (default `1`)
+
+Note: for fragmentation, missing-index signals, and clustered-index DDL recommendations, use `ShowHeaps`.
+
+### ShowHeaps
+
+File: `ShowHeaps.sql`
 
 Stored procedure that finds user-table heaps in a target database, analyzes DMV usage patterns, and recommends a clustered index for each heap. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database. A SQL Server 2022 instance examining a compatibility level 100 database is supported; catalog and index-type logic follow the target compatibility level, while `ONLINE` index DDL follows the host instance edition.
 
@@ -138,9 +169,9 @@ Stored procedure that finds user-table heaps in a target database, analyzes DMV 
 Deployment:
 
 ```sql
--- Run ExamineHeapTables.sql in the tool database
-EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase'
-EXEC dbo.ExamineHeapTables @TargetDatabase = N'YourDatabase', @SortBy = 'SCANS', @MinPageCount = 1000
+-- Run ShowHeaps.sql in the tool database
+EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
+EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'SCANS', @MinPageCount = 1000
 ```
 
 Parameters:
