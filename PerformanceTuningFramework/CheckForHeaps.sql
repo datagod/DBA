@@ -152,16 +152,6 @@ SELECT
  INNER JOIN ' + @QuotedDatabase + N'.sys.indexes AS hi
     ON hi.object_id = o.object_id
    AND hi.index_id = 0
- WHERE o.type = ''U''
-   AND s.name LIKE @SchemaFilter
-   AND o.name LIKE @TableFilter
-   AND NOT EXISTS (
-       SELECT 1
-         FROM ' + @QuotedDatabase + N'.sys.indexes AS ci
-        WHERE ci.object_id = o.object_id
-          AND ci.index_id > 0
-          AND ' + @ClusteredTypeFilter + N'
-   )
   LEFT JOIN (
       SELECT
           p.object_id,
@@ -198,7 +188,17 @@ SELECT
     ON us.database_id = @TargetDatabaseId
    AND us.object_id = o.object_id
    AND us.index_id = 0
- WHERE ISNULL(sz.RecordCount, 0) >= @MinRows'
+ WHERE o.type = ''U''
+   AND s.name LIKE @SchemaFilter
+   AND o.name LIKE @TableFilter
+   AND NOT EXISTS (
+       SELECT 1
+         FROM ' + @QuotedDatabase + N'.sys.indexes AS ci
+        WHERE ci.object_id = o.object_id
+          AND ci.index_id > 0
+          AND ' + @ClusteredTypeFilter + N'
+   )
+   AND ISNULL(sz.RecordCount, 0) >= @MinRows'
 
 EXEC sys.sp_executesql
     @Sql,
