@@ -143,23 +143,23 @@ SELECT 'SERVER', 'Scheduler_Count', CAST(COUNT(*) AS nvarchar(20)), COUNT(*)
   FROM sys.dm_os_schedulers
  WHERE is_online = 1
 UNION ALL
-SELECT 'SERVER', 'MaxWorkerThreads', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
+SELECT 'SERVER', 'MaxWorkerThreads', CONVERT(nvarchar(20), CONVERT(int, c.value_in_use)), CONVERT(decimal(18, 4), CONVERT(int, c.value_in_use))
   FROM sys.configurations AS c
  WHERE c.name = 'max worker threads'
 UNION ALL
-SELECT 'SERVER', 'MaxDegreeOfParallelism', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
+SELECT 'SERVER', 'MaxDegreeOfParallelism', CONVERT(nvarchar(20), CONVERT(int, c.value_in_use)), CONVERT(decimal(18, 4), CONVERT(int, c.value_in_use))
   FROM sys.configurations AS c
  WHERE c.name = 'max degree of parallelism'
 UNION ALL
-SELECT 'SERVER', 'CostThresholdForParallelism', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
+SELECT 'SERVER', 'CostThresholdForParallelism', CONVERT(nvarchar(20), CONVERT(int, c.value_in_use)), CONVERT(decimal(18, 4), CONVERT(int, c.value_in_use))
   FROM sys.configurations AS c
  WHERE c.name = 'cost threshold for parallelism'
 UNION ALL
-SELECT 'SERVER', 'OptimizeForAdHocWorkloads', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
+SELECT 'SERVER', 'OptimizeForAdHocWorkloads', CONVERT(nvarchar(20), CONVERT(int, c.value_in_use)), CONVERT(decimal(18, 4), CONVERT(int, c.value_in_use))
   FROM sys.configurations AS c
  WHERE c.name = 'optimize for ad hoc workloads'
 UNION ALL
-SELECT 'SERVER', 'BackupCompressionDefault', CAST(c.value_in_use AS nvarchar(20)), c.value_in_use
+SELECT 'SERVER', 'BackupCompressionDefault', CONVERT(nvarchar(20), CONVERT(int, c.value_in_use)), CONVERT(decimal(18, 4), CONVERT(int, c.value_in_use))
   FROM sys.configurations AS c
  WHERE c.name = 'backup compression default'
 UNION ALL
@@ -468,7 +468,7 @@ SELECT TOP (@TopN)
  INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_groups AS mig
     ON mig.index_group_handle = migs.group_handle
  INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_details AS mid
-    ON mid.index_group_handle = mig.index_group_handle
+    ON mid.index_handle = mig.index_handle
  INNER JOIN ' + @QuotedDatabase + N'.sys.objects AS o
     ON o.object_id = mid.object_id
  INNER JOIN ' + @QuotedDatabase + N'.sys.schemas AS s
@@ -495,7 +495,7 @@ SELECT @MissingIndexCount = COUNT(*)
  INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_groups AS mig
     ON mig.index_group_handle = migs.group_handle
  INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_details AS mid
-    ON mid.index_group_handle = mig.index_group_handle
+    ON mid.index_handle = mig.index_handle
  INNER JOIN ' + @QuotedDatabase + N'.sys.objects AS o
     ON o.object_id = mid.object_id
  INNER JOIN ' + @QuotedDatabase + N'.sys.schemas AS s
@@ -799,67 +799,15 @@ SELECT
 ---------------------------------------------------------------------------------------------------
 -- VLF COUNT
 ---------------------------------------------------------------------------------------------------
-IF OBJECT_ID('tempdb..#DbccLogInfo') IS NOT NULL
-    DROP TABLE #DbccLogInfo
-
 /*
-    DBCC LOGINFO returns a different column list on SQL Server 2008/2008 R2
-    than it does on SQL Server 2012+.
-
-    Do not create #DbccLogInfo separately inside IF/ELSE branches. SQL Server
-    performs compile-time name resolution for local temporary tables within the
-    procedure scope, so two CREATE TABLE #DbccLogInfo statements can raise:
-
-        There is already an object named '#DbccLogInfo' in the database.
-
-    Use one superset temp-table definition, then insert into the matching column
-    list for the detected SQL Server version.
+    SQL Server 2022 supports sys.dm_db_log_info(), which is preferable to DBCC LOGINFO.
+    This avoids temp-table shape issues caused by DBCC LOGINFO returning different column
+    sets across SQL Server versions.
 */
-CREATE TABLE #DbccLogInfo
-(
-    RecoveryUnitId int            NULL,
-    FileId         smallint       NULL,
-    FileSize       bigint         NULL,
-    StartOffset    bigint         NULL,
-    FSeqNo         int            NULL,
-    Status         tinyint        NULL,
-    Parity         tinyint        NULL,
-    CreateLSN      numeric(25, 0) NULL
-)
+SELECT @VLFCount = COUNT(*)
+  FROM sys.dm_db_log_info(@TargetDatabaseId)
 
-SET @Sql = N'DBCC LOGINFO(' + @QuotedDatabase + N') WITH NO_INFOMSGS'
-
-IF @MajorVersion < 11
-BEGIN
-    INSERT INTO #DbccLogInfo
-    (
-        FileId,
-        FileSize,
-        StartOffset,
-        FSeqNo,
-        Status,
-        Parity,
-        CreateLSN
-    )
-    EXEC (@Sql)
-END
-ELSE
-BEGIN
-    INSERT INTO #DbccLogInfo
-    (
-        RecoveryUnitId,
-        FileId,
-        FileSize,
-        StartOffset,
-        FSeqNo,
-        Status,
-        Parity,
-        CreateLSN
-    )
-    EXEC (@Sql)
-END
-
-SET @VLFCount = @@ROWCOUNT
+SET @VLFCount = ISNULL(@VLFCount, 0)
 
 INSERT INTO #Metrics (Category, MetricName, MetricValue, MetricNumeric)
 VALUES ('DATABASE', 'VLFCount', CAST(@VLFCount AS nvarchar(20)), @VLFCount)
