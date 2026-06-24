@@ -55,7 +55,8 @@ DECLARE
     @SortByUpper          varchar(10),
     @HeapCount            int,
     @TotalRows            bigint,
-    @TotalSizeMB          decimal(18, 1)
+    @TotalSizeMB          decimal(18, 1),
+    @ReportedCompatLevel  int
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
@@ -87,9 +88,11 @@ SELECT @CompatibilityLevel = d.compatibility_level
   FROM sys.databases AS d
  WHERE d.database_id = @TargetDatabaseId
 
-IF ISNULL(@CompatibilityLevel, 0) < 100
+SET @ReportedCompatLevel = ISNULL(@CompatibilityLevel, 0)
+
+IF @ReportedCompatLevel < 100
 BEGIN
-    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, ISNULL(@CompatibilityLevel, 0))
+    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, @ReportedCompatLevel)
     RETURN
 END
 
@@ -106,7 +109,7 @@ CREATE TABLE #Heaps
     SchemaName             sysname        NOT NULL,
     TableName              sysname        NOT NULL,
     ObjectID               int            NOT NULL,
-    RowCount               bigint         NOT NULL,
+    RecordCount            bigint         NOT NULL,
     SizeMB                 decimal(12, 1) NOT NULL,
     NonClusteredIndexCount int            NOT NULL,
     HasPrimaryKey          bit            NOT NULL,
@@ -122,7 +125,7 @@ INSERT INTO #Heaps
     SchemaName,
     TableName,
     ObjectID,
-    RowCount,
+    RecordCount,
     SizeMB,
     NonClusteredIndexCount,
     HasPrimaryKey,
@@ -135,7 +138,7 @@ SELECT
     s.name,
     o.name,
     o.object_id,
-    ISNULL(sz.RowCount, 0),
+    ISNULL(sz.RecordCount, 0),
     ISNULL(sz.SizeMB, 0),
     ISNULL(nc.NonClusteredIndexCount, 0),
     ISNULL(pk.HasPrimaryKey, 0),
@@ -162,7 +165,7 @@ SELECT
   LEFT JOIN (
       SELECT
           p.object_id,
-          RowCount = SUM(p.rows),
+          RecordCount = SUM(p.rows),
           SizeMB = SUM(a.total_pages) * 8.0 / 1024.0
         FROM ' + @QuotedDatabase + N'.sys.partitions AS p
        INNER JOIN ' + @QuotedDatabase + N'.sys.allocation_units AS a
@@ -195,7 +198,7 @@ SELECT
     ON us.database_id = @TargetDatabaseId
    AND us.object_id = o.object_id
    AND us.index_id = 0
- WHERE ISNULL(sz.RowCount, 0) >= @MinRows'
+ WHERE ISNULL(sz.RecordCount, 0) >= @MinRows'
 
 EXEC sys.sp_executesql
     @Sql,
@@ -207,7 +210,7 @@ EXEC sys.sp_executesql
 
 SELECT
     @HeapCount = COUNT(*),
-    @TotalRows = ISNULL(SUM(RowCount), 0),
+    @TotalRows = ISNULL(SUM(RecordCount), 0),
     @TotalSizeMB = ISNULL(SUM(SizeMB), 0)
   FROM #Heaps
 
@@ -230,7 +233,7 @@ SELECT
     SchemaName,
     TableName,
     ObjectID,
-    RowCount,
+    RecordCount,
     SizeMB,
     NonClusteredIndexCount,
     HasPrimaryKey,
@@ -240,7 +243,7 @@ SELECT
     HasUsageStats
   FROM #Heaps
  ORDER BY
-    CASE WHEN @SortByUpper = 'ROWS'  THEN RowCount END DESC,
+    CASE WHEN @SortByUpper = 'ROWS'  THEN RecordCount END DESC,
     CASE WHEN @SortByUpper = 'SIZE'  THEN SizeMB END DESC,
     CASE WHEN @SortByUpper = 'NC'    THEN NonClusteredIndexCount END DESC,
     CASE WHEN @SortByUpper = 'SCANS' THEN HeapScans END DESC,
