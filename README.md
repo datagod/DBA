@@ -129,6 +129,7 @@ DBA/
 ├── Procedures/                    # General-purpose stored procedures
 ├── Functions/                     # User-defined functions
 ├── Table/                         # Table DDL scripts
+├── Views/                         # Reusable diagnostic views
 ├── Queries/                       # Standalone diagnostic queries
 └── powershell/                    # Supporting PowerShell scripts
 ```
@@ -238,6 +239,9 @@ Scripts in `Procedures/` cover monitoring, maintenance visibility, SSIS, and ale
 | `ShowUnusedIndexes` | `ShowUnusedIndexes.sql` | Indexes with low usage signals |
 | `ShowJobHistory` | `ShowJobHistory.sql` | SQL Agent job history |
 | `ShowJobSchedules` | `ShowJobSchedules.sql` | SQL Agent job schedules |
+| `ShowRunningJobs` | `ShowRunningJobs.sql` | Currently executing SQL Agent jobs (uses `vRunningJobs`) |
+| `ShowServerIP` | `ShowServerIP.sql` | SQL Server listener IP addresses and ports |
+| `ShowServerState` | `ShowServerState.sql` | ASCII workload report with CPU, memory, and throughput bars |
 | `MeasureIOLatency` | `MeasureIOLatency (1).sql` | I/O latency measurement |
 | `ExamineStoredProcedure` | `ExamineStoredProcedure.sql` | Stored procedure metadata and definition review |
 | `GenerateIndexesForTable` | `GenerateIndexesForTable.sql` | Index DDL suggestions for a table |
@@ -303,6 +307,34 @@ Deploy table scripts before procedures that reference them.
 
 ---
 
+## Views
+
+Deploy view scripts before procedures that reference them.
+
+| View | File | Description |
+|------|------|-------------|
+| `vRunningJobs` | `Views/vRunningJobs.sql` | SQL Agent jobs currently executing on this instance |
+| `vIndexAnalysis` | `Views/vIndexAnalysis.sql` | Index descriptions, columns, and usage from captured `IndexAnalysis` rows |
+| `vLinks` | `Queries/vLinks` | Linked server connection and login mapping details |
+| `vRandom` | `Functions/fn_Random.sql` | Helper view used by `fn_Random` |
+
+Example:
+
+```sql
+SELECT JobName, StartDate, Duration, CurrentStepName
+  FROM dbo.vRunningJobs
+ ORDER BY DurationInSeconds DESC
+
+-- Latest index capture for a database
+SELECT IndexDescription, KeyColumns, IncludedColumns, TotalReads, UserUpdates, SizeMB
+  FROM dbo.vIndexAnalysis
+ WHERE DatabaseName = N'YourDatabase'
+   AND IsLatestRun = 1
+ ORDER BY SchemaName, TableName, DisplayIndexName
+```
+
+---
+
 ## Ad-Hoc Queries
 
 Standalone scripts in `Queries/` for one-off investigation (not wrapped as procedures):
@@ -312,7 +344,6 @@ Standalone scripts in `Queries/` for one-off investigation (not wrapped as proce
 | Recent poor-performing queries | `RecentPoorPerformingQueries.sql` |
 | Linked server tables | `ShowLinkedServerTables` |
 | Recovery model stats | `RecoveryStats` |
-| Linked server view | `vLinks` |
 
 ---
 

@@ -279,17 +279,13 @@ SELECT SchemaName, TableName, IndexName, UserUpdates, SizeMB
    AND UserUpdates > 0
  ORDER BY UserUpdates DESC
 
--- Index definitions for the latest run
-SELECT SchemaName, TableName, IndexName, KeyColumns, IncludedColumns,
-       FilterDefinition, CompressionDesc, IsUnique, IsPrimaryKey, FillFactor
-  FROM dbo.IndexAnalysis
+-- Index definitions for the latest run (use vIndexAnalysis after deploying Views/vIndexAnalysis.sql)
+SELECT IndexDescription, IndexSummary, KeyColumns, IncludedColumns, FilterDefinition,
+       CompressionDesc, TotalReads, UserUpdates, SizeMB, UsageCategory
+  FROM dbo.vIndexAnalysis
  WHERE DatabaseName = N'YourDatabase'
-   AND AnalysisRunID = (
-       SELECT TOP 1 AnalysisRunID
-         FROM dbo.IndexAnalysis
-        WHERE DatabaseName = N'YourDatabase'
-        ORDER BY CaptureDate DESC)
- ORDER BY SchemaName, TableName, IndexName
+   AND IsLatestRun = 1
+ ORDER BY SchemaName, TableName, DisplayIndexName
 ```
 
 Note: usage statistics reset when the SQL Server instance restarts. Indexes with no row in `sys.dm_db_index_usage_stats` have had no recorded activity since the restart.
