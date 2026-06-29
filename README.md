@@ -314,7 +314,7 @@ Deploy view scripts before procedures that reference them.
 | View | File | Description |
 |------|------|-------------|
 | `vRunningJobs` | `Views/vRunningJobs.sql` | SQL Agent jobs currently executing on this instance |
-| `vIndexAnalysis` | `Views/vIndexAnalysis.sql` | Index descriptions, columns, and usage from captured `IndexAnalysis` rows |
+| `vIndexAnalysis` | `Views/vIndexAnalysis.sql` | Index descriptions, columns, and usage from the latest `IndexAnalysis` run |
 | `vLinks` | `Queries/vLinks` | Linked server connection and login mapping details |
 | `vRandom` | `Functions/fn_Random.sql` | Helper view used by `fn_Random` |
 
@@ -328,7 +328,6 @@ SELECT JobName, StartDate, Duration, CurrentStepName
 -- Latest index capture
 SELECT ObjectName, DisplayIndexName, KeyColumns, IncludedColumns, TotalReads, UserUpdates, SizeMB
   FROM dbo.vIndexAnalysis
- WHERE IsLatestRun = 1
  ORDER BY SchemaName, TableName, DisplayIndexName
 ```
 

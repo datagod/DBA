@@ -5,7 +5,7 @@
   Requires: dbo.IndexAnalysis (run PerformanceTuningFramework\IndexAnalysis.sql first)
 
   Deploy to the DBA tool database, then query:
-    SELECT * FROM dbo.vIndexAnalysis WHERE IsLatestRun = 1
+    SELECT * FROM dbo.vIndexAnalysis
     SELECT ObjectName, DisplayIndexName, KeyColumns, TotalReads, UserUpdates, SizeMB
       FROM dbo.vIndexAnalysis WHERE IsUnused = 1
 */
@@ -28,7 +28,7 @@ AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: June 28, 2026
 -- Author:       Bill McEvoy
--- Description:  Human-friendly index descriptions and usage context from captured IndexAnalysis rows.
+-- Description:  Human-friendly index descriptions and usage context from the latest IndexAnalysis run.
 ---------------------------------------------------------------------------------------------------
 WITH RankedRuns AS
 (
@@ -40,7 +40,6 @@ WITH RankedRuns AS
       FROM dbo.IndexAnalysis AS ia
 )
 SELECT
-    ia.IndexAnalysisID,
     ia.SchemaName,
     ia.TableName,
     ia.IndexName,
@@ -136,13 +135,11 @@ SELECT
                         WHEN ia.TotalReads > 0 AND ia.UserUpdates > (ia.TotalReads * 10) THEN 'Write-heavy'
                         WHEN ia.TotalReads = 0 AND ia.UserUpdates = 0 THEN 'No activity'
                         ELSE 'Active'
-                    END,
-
-    rr.RunRank,
-    IsLatestRun = CASE WHEN rr.RunRank = 1 THEN CAST(1 AS bit) ELSE CAST(0 AS bit) END
+                    END
   FROM dbo.IndexAnalysis AS ia
   JOIN RankedRuns AS rr
     ON rr.IndexAnalysisID = ia.IndexAnalysisID
+ WHERE rr.RunRank = 1
 GO
 
 IF OBJECT_ID('dbo.vIndexAnalysis') IS NOT NULL

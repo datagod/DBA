@@ -283,7 +283,6 @@ SELECT SchemaName, TableName, IndexName, UserUpdates, SizeMB
 SELECT ObjectName, DisplayIndexName, IndexTypeDesc, KeyColumns, IncludedColumns, FilterDefinition,
        CompressionDesc, TotalReads, UserUpdates, SizeMB, UsageCategory
   FROM dbo.vIndexAnalysis
- WHERE IsLatestRun = 1
  ORDER BY SchemaName, TableName, DisplayIndexName
 ```
 
