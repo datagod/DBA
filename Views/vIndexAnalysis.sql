@@ -5,8 +5,9 @@
   Requires: dbo.IndexAnalysis (run PerformanceTuningFramework\IndexAnalysis.sql first)
 
   Deploy to the DBA tool database, then query:
-    SELECT * FROM dbo.vIndexAnalysis WHERE DatabaseName = N'YourDB' AND IsLatestRun = 1
-    SELECT IndexDescription, TotalReads, UserUpdates, SizeMB FROM dbo.vIndexAnalysis WHERE IsUnused = 1
+    SELECT * FROM dbo.vIndexAnalysis WHERE IsLatestRun = 1
+    SELECT ObjectName, DisplayIndexName, KeyColumns, TotalReads, UserUpdates, SizeMB
+      FROM dbo.vIndexAnalysis WHERE IsUnused = 1
 */
 
 USE DBA
@@ -40,19 +41,10 @@ WITH RankedRuns AS
 )
 SELECT
     ia.IndexAnalysisID,
-    ia.AnalysisRunID,
-    ia.CaptureDate,
-    ia.ServerName,
-    ia.DatabaseName,
     ia.SchemaName,
     ia.TableName,
     ia.IndexName,
-    ia.ObjectID,
     ia.IndexID,
-
-    QualifiedTableName = QUOTENAME(ia.DatabaseName) + N'.'
-                       + QUOTENAME(ia.SchemaName) + N'.'
-                       + QUOTENAME(ia.TableName),
 
     ObjectName = QUOTENAME(ia.SchemaName) + N'.' + QUOTENAME(ia.TableName),
 
@@ -83,58 +75,6 @@ SELECT
     ia.IsDisabled,
     ia.[FillFactor],
     ia.CompressionDesc,
-
-    IndexDescription = CASE
-        WHEN ia.IndexID = 0 THEN
-            N'HEAP on ' + QUOTENAME(ia.SchemaName) + N'.' + QUOTENAME(ia.TableName)
-        ELSE
-            UPPER(ia.IndexTypeDesc)
-            + CASE WHEN ia.IsUnique = 1 THEN N' UNIQUE' ELSE N'' END
-            + CASE WHEN ia.IsPrimaryKey = 1 THEN N' PRIMARY KEY' ELSE N'' END
-            + CASE WHEN ia.IsDisabled = 1 THEN N' (DISABLED)' ELSE N'' END
-            + N' on ' + QUOTENAME(ia.SchemaName) + N'.' + QUOTENAME(ia.TableName)
-            + N' (' + ISNULL(ia.KeyColumns, N'') + N')'
-            + CASE
-                  WHEN ia.IncludedColumns IS NOT NULL AND LTRIM(RTRIM(ia.IncludedColumns)) <> N''
-                      THEN N' INCLUDE (' + ia.IncludedColumns + N')'
-                  ELSE N''
-              END
-            + CASE
-                  WHEN ia.IsFiltered = 1
-                   AND ia.FilterDefinition IS NOT NULL
-                   AND LTRIM(RTRIM(ia.FilterDefinition)) <> N''
-                      THEN N' WHERE ' + ia.FilterDefinition
-                  ELSE N''
-              END
-            + CASE
-                  WHEN ia.CompressionDesc IS NOT NULL
-                   AND ia.CompressionDesc NOT IN (N'NONE', N'')
-                      THEN N' WITH (' + ia.CompressionDesc + N')'
-                  ELSE N''
-              END
-            + CASE
-                  WHEN ia.[FillFactor] IS NOT NULL AND ia.[FillFactor] > 0 AND ia.[FillFactor] < 100
-                      THEN N' FILLFACTOR = ' + CAST(ia.[FillFactor] AS nvarchar(3))
-                  ELSE N''
-              END
-    END,
-
-    IndexSummary = CASE
-        WHEN ia.IndexID = 0 THEN
-            N'Heap table with no clustered index'
-        ELSE
-            ISNULL(ia.IndexName, N'(unnamed)')
-            + N' | '
-            + ia.IndexTypeDesc
-            + CASE WHEN ia.IsPrimaryKey = 1 THEN N' PK' ELSE N'' END
-            + CASE WHEN ia.IsUnique = 1 AND ia.IsPrimaryKey = 0 THEN N' UQ' ELSE N'' END
-            + N' | keys: ' + ISNULL(NULLIF(LTRIM(RTRIM(ia.KeyColumns)), N''), N'(none)')
-            + CASE
-                  WHEN ia.IncludedColumns IS NOT NULL AND LTRIM(RTRIM(ia.IncludedColumns)) <> N''
-                      THEN N' | includes: ' + ia.IncludedColumns
-                  ELSE N''
-              END
-    END,
 
     ia.UserSeeks,
     ia.UserScans,

@@ -280,11 +280,10 @@ SELECT SchemaName, TableName, IndexName, UserUpdates, SizeMB
  ORDER BY UserUpdates DESC
 
 -- Index definitions for the latest run (use vIndexAnalysis after deploying Views/vIndexAnalysis.sql)
-SELECT IndexDescription, IndexSummary, KeyColumns, IncludedColumns, FilterDefinition,
+SELECT ObjectName, DisplayIndexName, IndexTypeDesc, KeyColumns, IncludedColumns, FilterDefinition,
        CompressionDesc, TotalReads, UserUpdates, SizeMB, UsageCategory
   FROM dbo.vIndexAnalysis
- WHERE DatabaseName = N'YourDatabase'
-   AND IsLatestRun = 1
+ WHERE IsLatestRun = 1
  ORDER BY SchemaName, TableName, DisplayIndexName
 ```
 

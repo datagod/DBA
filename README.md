@@ -325,11 +325,10 @@ SELECT JobName, StartDate, Duration, CurrentStepName
   FROM dbo.vRunningJobs
  ORDER BY DurationInSeconds DESC
 
--- Latest index capture for a database
-SELECT IndexDescription, KeyColumns, IncludedColumns, TotalReads, UserUpdates, SizeMB
+-- Latest index capture
+SELECT ObjectName, DisplayIndexName, KeyColumns, IncludedColumns, TotalReads, UserUpdates, SizeMB
   FROM dbo.vIndexAnalysis
- WHERE DatabaseName = N'YourDatabase'
-   AND IsLatestRun = 1
+ WHERE IsLatestRun = 1
  ORDER BY SchemaName, TableName, DisplayIndexName
 ```
 
