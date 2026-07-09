@@ -29,6 +29,10 @@ AS
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
+DECLARE
+    @AnalysisRunID_A_Text varchar(36),
+    @AnalysisRunID_B_Text varchar(36)
+
 IF OBJECT_ID('dbo.DatabasePerformanceRun') IS NULL
 BEGIN
     RAISERROR('Tables dbo.DatabasePerformanceRun/Metric/Finding do not exist. Run DatabasePerformanceAnalysis.sql first.', 16, 1)
@@ -37,13 +41,15 @@ END
 
 IF NOT EXISTS (SELECT 1 FROM dbo.DatabasePerformanceRun WHERE AnalysisRunID = @AnalysisRunID_A)
 BEGIN
-    RAISERROR('AnalysisRunID_A %s was not found.', 16, 1, @AnalysisRunID_A)
+    SET @AnalysisRunID_A_Text = CONVERT(varchar(36), @AnalysisRunID_A)
+    RAISERROR('AnalysisRunID_A %s was not found.', 16, 1, @AnalysisRunID_A_Text)
     RETURN
 END
 
 IF NOT EXISTS (SELECT 1 FROM dbo.DatabasePerformanceRun WHERE AnalysisRunID = @AnalysisRunID_B)
 BEGIN
-    RAISERROR('AnalysisRunID_B %s was not found.', 16, 1, @AnalysisRunID_B)
+    SET @AnalysisRunID_B_Text = CONVERT(varchar(36), @AnalysisRunID_B)
+    RAISERROR('AnalysisRunID_B %s was not found.', 16, 1, @AnalysisRunID_B_Text)
     RETURN
 END
 

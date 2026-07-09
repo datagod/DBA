@@ -65,7 +65,8 @@ DECLARE
     @NoStatsCount         int,
     @UnusedSizeMB         decimal(18, 1),
     @RecommendationCount  int,
-    @HighPriorityCount    int
+    @HighPriorityCount    int,
+    @AnalysisRunIDText    varchar(36)
 
 IF @TargetDatabase IS NULL
     SET @TargetDatabase = DB_NAME()
@@ -233,7 +234,8 @@ SELECT
 
 IF NOT EXISTS (SELECT 1 FROM #CapturedIndexes)
 BEGIN
-    RAISERROR('No IndexAnalysis rows found for run %s in database ''%s'' with the current filters.', 16, 1, @AnalysisRunID, @TargetDatabase)
+    SET @AnalysisRunIDText = CONVERT(varchar(36), @AnalysisRunID)
+    RAISERROR('No IndexAnalysis rows found for run %s in database ''%s'' with the current filters.', 16, 1, @AnalysisRunIDText, @TargetDatabase)
     RETURN
 END
 
