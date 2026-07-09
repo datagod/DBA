@@ -17,6 +17,8 @@
     @TopN                  - maximum recommendations returned (default 100)
     @IncludeMissingIndexes - include live missing-index DMV recommendations (default 1)
     @ReturnResultSets      - return summary, analysis, and recommendation result sets (default 1)
+
+  The recommendations result set includes RecordCount (estimated rows in the index at capture time).
 */
 
 SET ANSI_NULLS ON
@@ -249,6 +251,26 @@ SELECT
     @UnusedSizeMB    = SUM(CASE WHEN IndexID > 0 AND TotalReads = 0 AND UserUpdates >= @MinUpdatesForUnused THEN SizeMB ELSE 0 END)
   FROM #CapturedIndexes
 
+IF OBJECT_ID('tempdb..#TableRowCounts') IS NOT NULL
+    DROP TABLE #TableRowCounts
+
+CREATE TABLE #TableRowCounts
+(
+    ObjectID          int    NOT NULL PRIMARY KEY,
+    TableRecordCount  bigint NOT NULL
+)
+
+INSERT INTO #TableRowCounts
+(
+    ObjectID,
+    TableRecordCount
+)
+SELECT
+    ci.ObjectID,
+    TableRecordCount = MAX(ci.RecordCount)
+  FROM #CapturedIndexes AS ci
+ GROUP BY ci.ObjectID
+
 IF OBJECT_ID('tempdb..#Recommendations') IS NOT NULL
     DROP TABLE #Recommendations
 
@@ -265,7 +287,8 @@ CREATE TABLE #Recommendations
     FindingDetail      nvarchar(max)   NOT NULL,
     Rationale          nvarchar(max)   NOT NULL,
     SuggestedDdl       nvarchar(max)   NULL,
-    MetricNumeric      decimal(18, 4)  NOT NULL
+    MetricNumeric      decimal(18, 4)  NOT NULL,
+    RecordCount        bigint          NOT NULL
 )
 
 ----------------------------------------------------------------------------------------------------
@@ -284,7 +307,8 @@ INSERT INTO #Recommendations
     FindingDetail,
     Rationale,
     SuggestedDdl,
-    MetricNumeric
+    MetricNumeric,
+    RecordCount
 )
 SELECT
     PriorityScore = CAST(
@@ -308,7 +332,8 @@ SELECT
                   + CASE WHEN ci.IncludedColumns IS NOT NULL THEN N', Includes=' + ci.IncludedColumns ELSE N'' END,
     Rationale = N'Nonclustered indexes that receive maintenance writes without supporting read activity increase INSERT/UPDATE/DELETE cost and consume storage.',
     SuggestedDdl = N'DROP INDEX ' + QUOTENAME(ci.IndexName) + N' ON ' + QUOTENAME(ci.SchemaName) + N'.' + QUOTENAME(ci.TableName) + N';',
-    MetricNumeric = CAST(ci.UserUpdates AS decimal(18, 4))
+    MetricNumeric = CAST(ci.UserUpdates AS decimal(18, 4)),
+    ci.RecordCount
   FROM #CapturedIndexes AS ci
  WHERE ci.IndexID > 0
    AND ci.IndexTypeDesc = 'NONCLUSTERED'
@@ -335,7 +360,8 @@ INSERT INTO #Recommendations
     FindingDetail,
     Rationale,
     SuggestedDdl,
-    MetricNumeric
+    MetricNumeric,
+    RecordCount
 )
 SELECT
     PriorityScore = CASE
@@ -374,7 +400,8 @@ SELECT
                               + N' ON ' + QUOTENAME(ci.SchemaName) + N'.' + QUOTENAME(ci.TableName) + N';'
                        ELSE NULL
                    END,
-    MetricNumeric = CAST(ISNULL(ci.UserUpdates, 0) + ISNULL(ci.TotalReads, 0) AS decimal(18, 4))
+    MetricNumeric = CAST(ISNULL(ci.UserUpdates, 0) + ISNULL(ci.TotalReads, 0) AS decimal(18, 4)),
+    ci.RecordCount
   FROM #CapturedIndexes AS ci
  WHERE ci.IndexID > 0
    AND ci.IsDisabled = 1
@@ -399,7 +426,8 @@ INSERT INTO #Recommendations
     FindingDetail,
     Rationale,
     SuggestedDdl,
-    MetricNumeric
+    MetricNumeric,
+    RecordCount
 )
 SELECT
     PriorityScore = CAST(
@@ -428,7 +456,8 @@ SELECT
     SuggestedDdl = N'-- Review index usage and consider DROP or redesign:' + CHAR(13) + CHAR(10)
                  + N'-- DROP INDEX ' + QUOTENAME(ISNULL(ci.IndexName, N'<index>')) + N' ON '
                  + QUOTENAME(ci.SchemaName) + N'.' + QUOTENAME(ci.TableName) + N';',
-    MetricNumeric = CAST(ci.UserUpdates AS decimal(18, 4))
+    MetricNumeric = CAST(ci.UserUpdates AS decimal(18, 4)),
+    ci.RecordCount
   FROM #CapturedIndexes AS ci
  WHERE ci.IndexID > 0
    AND ci.IsDisabled = 0
@@ -452,7 +481,8 @@ INSERT INTO #Recommendations
     FindingDetail,
     Rationale,
     SuggestedDdl,
-    MetricNumeric
+    MetricNumeric,
+    RecordCount
 )
 SELECT
     PriorityScore = CAST(
@@ -487,7 +517,8 @@ SELECT
     Rationale = N'SQL Server can satisfy the inferior index access paths using the broader or better-used index, reducing storage and DML overhead.',
     SuggestedDdl = N'DROP INDEX ' + QUOTENAME(inferior.IndexName) + N' ON '
                  + QUOTENAME(inferior.SchemaName) + N'.' + QUOTENAME(inferior.TableName) + N';',
-    MetricNumeric = CAST(inferior.UserUpdates AS decimal(18, 4))
+    MetricNumeric = CAST(inferior.UserUpdates AS decimal(18, 4)),
+    inferior.RecordCount
   FROM #CapturedIndexes AS inferior
  INNER JOIN #CapturedIndexes AS superior
     ON superior.ObjectID = inferior.ObjectID
@@ -553,7 +584,8 @@ INSERT INTO #Recommendations
     FindingDetail,
     Rationale,
     SuggestedDdl,
-    MetricNumeric
+    MetricNumeric,
+    RecordCount
 )
 SELECT
     PriorityScore = CAST(
@@ -594,7 +626,8 @@ SELECT
                           + N' ON ' + QUOTENAME(heap.SchemaName) + N'.' + QUOTENAME(heap.TableName)
                           + N' (' + nc.KeyColumns + N') WITH (' + @IndexWithOptions + N', FILLFACTOR = 90);'
                    END,
-    MetricNumeric = CAST(heap.TotalReads + heap.UserUpdates AS decimal(18, 4))
+    MetricNumeric = CAST(heap.TotalReads + heap.UserUpdates AS decimal(18, 4)),
+    heap.RecordCount
   FROM #CapturedIndexes AS heap
   LEFT JOIN PrimaryKeyIndexes AS pk
     ON pk.ObjectID = heap.ObjectID
@@ -713,7 +746,8 @@ BEGIN
         FindingDetail,
         Rationale,
         SuggestedDdl,
-        MetricNumeric
+        MetricNumeric,
+        RecordCount
     )
     SELECT
         PriorityScore = CAST(
@@ -747,8 +781,11 @@ BEGIN
                            ELSE N''
                        END
                      + N' WITH (' + @IndexWithOptionsNC + N');',
-        MetricNumeric = mi.ImpactScore
+        MetricNumeric = mi.ImpactScore,
+        RecordCount = ISNULL(tr.TableRecordCount, 0)
       FROM #MissingIndexes AS mi
+      LEFT JOIN #TableRowCounts AS tr
+        ON tr.ObjectID = mi.ObjectID
      WHERE NULLIF(mi.KeyColumns, N'') IS NOT NULL
        AND NOT EXISTS (
            SELECT 1
@@ -879,7 +916,8 @@ BEGIN
         r.FindingDetail,
         r.Rationale,
         r.SuggestedDdl,
-        r.MetricNumeric
+        r.MetricNumeric,
+        r.RecordCount
       FROM #Recommendations AS r
      ORDER BY
         r.PriorityScore DESC,
