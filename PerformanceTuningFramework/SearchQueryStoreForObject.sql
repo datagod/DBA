@@ -1,3 +1,4 @@
+use DBATools
 /*
   SearchQueryStoreForObject.sql
   Performance Tuning Framework
@@ -336,3 +337,11 @@ IF OBJECT_ID('dbo.SearchQueryStoreForObject') IS NOT NULL
     PRINT 'Procedure SearchQueryStoreForObject created.'
 ELSE
     PRINT 'Procedure SearchQueryStoreForObject NOT created.'
+
+
+go
+
+
+    EXEC dbo.SearchQueryStoreForObject
+        @ObjectName = N'case32',
+        @TargetDatabase = N'nova_datamart'
