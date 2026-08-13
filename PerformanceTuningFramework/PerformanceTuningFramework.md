@@ -451,6 +451,42 @@ Parameters:
 - `@MaxFileSizeMB` — rollover size in MB (default `100`)
 - `@TraceControlID` — OUTPUT control row identifier
 
+### ShowAgentJobReport
+
+File: `ShowAgentJobReport.sql`
+
+Fixed-width, screen-friendly inventory of SQL Agent jobs on the instance: job metadata, attached schedules, and step definitions.
+
+- Reads `msdb` catalog views (`sysjobs`, `sysjobsteps`, `sysschedules`, `sysjobschedules`, recent `sysjobhistory`, current `sysjobactivity`)
+- Summary counts: enabled/disabled, scheduled/unscheduled, running now, last-run failures
+- Per job: category, owner, created/modified, last run outcome/time/duration, running indicator
+- Per schedule: frequency, day interval, time window, next run, enabled flag
+- Per step: subsystem, database, success/fail flow, retry/proxy/run-as, optional truncated command text
+- Does not persist results to a table
+
+Deployment:
+
+```sql
+-- Run ShowAgentJobReport.sql in the tool database
+EXEC dbo.ShowAgentJobReport
+EXEC dbo.ShowAgentJobReport @JobFilter = N'%Backup%', @EnabledOnly = 1
+EXEC dbo.ShowAgentJobReport @IncludeCommandText = 0, @SortBy = 'CATEGORY'
+```
+
+Parameters:
+
+- `@JobFilter` — LIKE filter for job name (default `%`)
+- `@CategoryFilter` — LIKE filter for category name (default `%`)
+- `@EnabledOnly` — `1` = enabled jobs only (default `0`)
+- `@IncludeSchedules` — include schedule detail (default `1`)
+- `@IncludeSteps` — include job step detail (default `1`)
+- `@IncludeCommandText` — include truncated step command text (default `1`)
+- `@MaxCommandLength` — max command characters shown per step (default `160`)
+- `@SortBy` — `NAME`, `CATEGORY`, `OWNER`, or `ENABLED` (default `NAME`)
+- `@ReportWidth` — kept for compatibility; layout is fixed at 120 characters
+
+Note: Requires permission to read SQL Agent job metadata in `msdb` (for example `SQLAgentReaderRole` or higher). Complements `ShowJobHistory` / `ShowRunningJobs` in `Procedures/` which cover execution history and currently running jobs.
+
 ### ShowTraceWritablePaths
 
 File: `ShowTraceWritablePaths.sql`
