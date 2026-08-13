@@ -18,7 +18,7 @@
     @IncludeSchedules    - include schedule detail (default 1)
     @IncludeSteps        - include job step detail (default 1)
     @IncludeCommandText  - include truncated step command text (default 1)
-    @MaxCommandLength    - max command characters shown per step (default 160)
+    @MaxCommandLength    - max command characters shown per step (default 2000; preserves line breaks)
     @SortBy              - NAME | CATEGORY | OWNER | ENABLED (default NAME)
     @OutputFormat        - MARKDOWN (default) | TEXT
     @ReportWidth         - TEXT mode only; layout fixed at 120 characters
@@ -64,7 +64,7 @@ ALTER PROCEDURE dbo.ShowAgentJobReport
     @IncludeSchedules   bit           = 1,
     @IncludeSteps       bit           = 1,
     @IncludeCommandText bit           = 1,
-    @MaxCommandLength   int           = 160,
+    @MaxCommandLength   int           = 2000,
     @SortBy             varchar(20)   = 'NAME',
     @OutputFormat       varchar(20)   = 'MARKDOWN',
     @ReportWidth        tinyint       = 120
@@ -107,6 +107,10 @@ DECLARE
     @MdSubsystem      nvarchar(100),
     @MdDatabase       nvarchar(300),
     @MdCommand        nvarchar(max),
+    @CmdRemainder     nvarchar(max),
+    @CmdLine          nvarchar(max),
+    @CmdBreak         int,
+    @CmdLineNo        int,
     @TotalJobs        int,
     @EnabledJobs      int,
     @DisabledJobs     int,
@@ -171,8 +175,8 @@ SET @CategoryPattern =
 IF @MaxCommandLength IS NULL OR @MaxCommandLength < 40
     SET @MaxCommandLength = 40
 
-IF @MaxCommandLength > 400
-    SET @MaxCommandLength = 400
+IF @MaxCommandLength > 8000
+    SET @MaxCommandLength = 8000
 
 SET @ReportWidth = 120
 SET @SortByUpper = UPPER(LTRIM(RTRIM(ISNULL(@SortBy, 'NAME'))))
@@ -614,11 +618,16 @@ BEGIN
         st.retry_interval,
         st.flags,
         ProxyName = p.name,
+        /* Preserve line breaks: normalize CRLF/CR to LF, expand tabs; do not collapse to one line */
         CommandText = CASE
                           WHEN @IncludeCommandText = 0 THEN NULL
-                          ELSE REPLACE(REPLACE(REPLACE(REPLACE(
-                                   LEFT(ISNULL(st.command, N''), @MaxCommandLength),
-                                   CHAR(13), N' '), CHAR(10), N' '), CHAR(9), N' '), N'  ', N' ')
+                          ELSE LEFT(
+                                   REPLACE(
+                                       REPLACE(
+                                           REPLACE(ISNULL(st.command, N''), CHAR(13) + CHAR(10), CHAR(10)),
+                                           CHAR(13), CHAR(10)),
+                                       CHAR(9), N'    '),
+                                   @MaxCommandLength)
                       END
       FROM #Jobs AS j
      INNER JOIN msdb.dbo.sysjobsteps AS st
@@ -903,17 +912,56 @@ BEGIN
                     WHILE @@FETCH_STATUS = 0
                     BEGIN
                         SET @MdStepName = REPLACE(CAST(@StepName AS nvarchar(128)), N'|', N'/')
-                        SET @MdCommand = REPLACE(REPLACE(ISNULL(@CommandText, N''), NCHAR(13), N' '), NCHAR(10), N' ')
-                        /* Avoid breaking fenced blocks if command contains triple backticks */
+                        /* Normalize any remaining CR; keep LF as line breaks for wiki code fences */
+                        SET @MdCommand = REPLACE(ISNULL(@CommandText, N''), NCHAR(13), N'')
                         SET @MdCommand = REPLACE(@MdCommand, N'```', N'[...]')
 
                         INSERT INTO #Report (ReportLine)
                         SELECT N'**Step ' + CAST(@StepId AS nvarchar(10)) + N' — ' + @MdStepName + N'**'
                         UNION ALL SELECT N''
                         UNION ALL SELECT N'```sql'
-                        UNION ALL SELECT @MdCommand
-                                   + CASE WHEN LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength THEN N' ...' ELSE N'' END
-                        UNION ALL SELECT N'```'
+
+                        /* Emit each SQL line as its own report row (wiki-friendly) */
+                        SET @CmdRemainder = @MdCommand
+                        SET @CmdLineNo = 0
+
+                        IF @CmdRemainder IS NULL OR @CmdRemainder = N''
+                        BEGIN
+                            INSERT INTO #Report (ReportLine)
+                            SELECT N'(empty)'
+                        END
+                        ELSE
+                        BEGIN
+                            WHILE LEN(@CmdRemainder) > 0
+                            BEGIN
+                                SET @CmdBreak = CHARINDEX(NCHAR(10), @CmdRemainder)
+
+                                IF @CmdBreak = 0
+                                BEGIN
+                                    SET @CmdLine = @CmdRemainder
+                                    SET @CmdRemainder = N''
+                                END
+                                ELSE
+                                BEGIN
+                                    SET @CmdLine = LEFT(@CmdRemainder, @CmdBreak - 1)
+                                    SET @CmdRemainder = SUBSTRING(@CmdRemainder, @CmdBreak + 1, LEN(@CmdRemainder))
+                                END
+
+                                SET @CmdLineNo = @CmdLineNo + 1
+
+                                INSERT INTO #Report (ReportLine)
+                                SELECT @CmdLine
+                            END
+                        END
+
+                        IF LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength
+                        BEGIN
+                            INSERT INTO #Report (ReportLine)
+                            SELECT N'-- ... truncated at ' + CAST(@MaxCommandLength AS nvarchar(20)) + N' characters'
+                        END
+
+                        INSERT INTO #Report (ReportLine)
+                        SELECT N'```'
                         UNION ALL SELECT N''
 
                         FETCH NEXT FROM step_cursor INTO @StepId, @StepName, @CommandText
@@ -1197,16 +1245,45 @@ BEGIN
                     IF @IncludeCommandText = 1
                        AND NULLIF(LTRIM(RTRIM(ISNULL(@CommandText, N''))), N'') IS NOT NULL
                     BEGIN
-                        INSERT INTO #Report (ReportLine)
-                        SELECT LEFT(
-                                   '     cmd: '
-                                   + LEFT(ISNULL(CAST(@CommandText AS varchar(200)), '(empty)') + @BlankLine, @MaxCommandLength)
-                                   + CASE
-                                         WHEN LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength THEN '...'
-                                         ELSE ''
-                                     END
-                                   + @BlankLine,
-                                   @ReportWidth)
+                        /* One report line per command line (preserve job-step formatting) */
+                        SET @CmdRemainder = REPLACE(ISNULL(@CommandText, N''), CHAR(13), N'')
+                        SET @CmdLineNo = 0
+
+                        WHILE LEN(@CmdRemainder) > 0
+                        BEGIN
+                            SET @CmdBreak = CHARINDEX(CHAR(10), @CmdRemainder)
+
+                            IF @CmdBreak = 0
+                            BEGIN
+                                SET @CmdLine = @CmdRemainder
+                                SET @CmdRemainder = N''
+                            END
+                            ELSE
+                            BEGIN
+                                SET @CmdLine = LEFT(@CmdRemainder, @CmdBreak - 1)
+                                SET @CmdRemainder = SUBSTRING(@CmdRemainder, @CmdBreak + 1, LEN(@CmdRemainder))
+                            END
+
+                            SET @CmdLineNo = @CmdLineNo + 1
+
+                            INSERT INTO #Report (ReportLine)
+                            SELECT LEFT(
+                                       CASE WHEN @CmdLineNo = 1 THEN '     cmd: ' ELSE '          ' END
+                                       + LEFT(ISNULL(CAST(@CmdLine AS varchar(200)), '') + @BlankLine, @ReportWidth - 10)
+                                       + @BlankLine,
+                                       @ReportWidth)
+                        END
+
+                        IF LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength
+                        BEGIN
+                            INSERT INTO #Report (ReportLine)
+                            SELECT LEFT(
+                                       '          ... truncated at '
+                                       + CAST(@MaxCommandLength AS varchar(20))
+                                       + ' characters'
+                                       + @BlankLine,
+                                       @ReportWidth)
+                        END
                     END
 
                     FETCH NEXT FROM step_cursor_txt INTO

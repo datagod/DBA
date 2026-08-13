@@ -482,7 +482,7 @@ Parameters:
 - `@IncludeSchedules` — include schedule detail (default `1`)
 - `@IncludeSteps` — include job step detail (default `1`)
 - `@IncludeCommandText` — include truncated step command text (default `1`)
-- `@MaxCommandLength` — max command characters shown per step (default `160`)
+- `@MaxCommandLength` — max command characters shown per step (default `2000`; line breaks preserved)
 - `@SortBy` — `NAME`, `CATEGORY`, `OWNER`, or `ENABLED` (default `NAME`)
 - `@OutputFormat` — `MARKDOWN` (default, wiki-friendly) or `TEXT` (fixed-width)
 - `@ReportWidth` — TEXT mode only; layout is fixed at 120 characters
