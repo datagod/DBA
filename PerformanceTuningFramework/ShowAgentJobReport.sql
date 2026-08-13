@@ -54,15 +54,15 @@ GO
 
 ALTER PROCEDURE dbo.ShowAgentJobReport
 (
-    @JobFilter          sysname     = N'%',
-    @CategoryFilter     sysname     = N'%',
-    @EnabledOnly        bit         = 0,
-    @IncludeSchedules   bit         = 1,
-    @IncludeSteps       bit         = 1,
-    @IncludeCommandText bit         = 1,
-    @MaxCommandLength   int         = 160,
-    @SortBy             varchar(20) = 'NAME',
-    @ReportWidth        tinyint     = 120
+    @JobFilter          nvarchar(256) = '%',
+    @CategoryFilter     nvarchar(256) = '%',
+    @EnabledOnly        bit           = 0,
+    @IncludeSchedules   bit           = 1,
+    @IncludeSteps       bit           = 1,
+    @IncludeCommandText bit           = 1,
+    @MaxCommandLength   int           = 160,
+    @SortBy             varchar(20)   = 'NAME',
+    @ReportWidth        tinyint       = 120
 )
 AS
 ---------------------------------------------------------------------------------------------------
@@ -70,7 +70,10 @@ AS
 -- Author:       Bill McEvoy
 -- Description:  Fixed-width SQL Agent job inventory report: jobs, schedules, and job steps
 --               with subsystem, database context, flow control, and optional command text.
+-- Date Revised: August 13, 2026
+-- Reason:       Use nvarchar filters (not sysname) for LIKE patterns; normalize filter locals.
 ---------------------------------------------------------------------------------------------------
+BEGIN
 SET NOCOUNT ON
 
 DECLARE
@@ -84,6 +87,8 @@ DECLARE
     @BlankLine        varchar(120),
     @LineNo           int,
     @SortByUpper      varchar(20),
+    @JobNamePattern   nvarchar(256),
+    @CategoryPattern  nvarchar(256),
     @TotalJobs        int,
     @EnabledJobs      int,
     @DisabledJobs     int,
@@ -132,11 +137,18 @@ DECLARE
     @ProxyName        sysname,
     @CommandText      nvarchar(max)
 
-IF @JobFilter IS NULL OR LTRIM(RTRIM(@JobFilter)) = N''
-    SET @JobFilter = N'%'
+/* Normalize LIKE patterns into locals (parameters remain unchanged for caller clarity) */
+SET @JobNamePattern =
+    CASE
+        WHEN @JobFilter IS NULL OR LTRIM(RTRIM(@JobFilter)) = N'' THEN N'%'
+        ELSE LTRIM(RTRIM(@JobFilter))
+    END
 
-IF @CategoryFilter IS NULL OR LTRIM(RTRIM(@CategoryFilter)) = N''
-    SET @CategoryFilter = N'%'
+SET @CategoryPattern =
+    CASE
+        WHEN @CategoryFilter IS NULL OR LTRIM(RTRIM(@CategoryFilter)) = N'' THEN N'%'
+        ELSE LTRIM(RTRIM(@CategoryFilter))
+    END
 
 IF @MaxCommandLength IS NULL OR @MaxCommandLength < 40
     SET @MaxCommandLength = 40
@@ -361,8 +373,8 @@ SELECT
    AND lh.RowNum = 1
   LEFT JOIN Running AS r
     ON r.job_id = j.job_id
- WHERE j.name LIKE @JobFilter
-   AND ISNULL(c.name, N'') LIKE @CategoryFilter
+ WHERE j.name LIKE @JobNamePattern
+   AND ISNULL(c.name, N'') LIKE @CategoryPattern
    AND (@EnabledOnly = 0 OR j.enabled = 1)
 
 SELECT
@@ -620,14 +632,14 @@ SELECT LEFT(' Schedules: ' + CAST(@TotalSchedules AS varchar(10))
 UNION ALL
 SELECT LEFT(' Steps: ' + CAST(@TotalSteps AS varchar(10))
             + '  |  last-run failed (outcome): ' + CAST(@FailedLastRun AS varchar(10))
-            + '  |  filter job: ' + CONVERT(CAST(@JobFilter AS varchar(40)), 40)
+            + '  |  filter job: ' + LEFT(CAST(@JobNamePattern AS varchar(40)), 40)
             + '  |  sort: ' + @SortByUpper
             + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT LEFT(' Options: schedules=' + CASE WHEN @IncludeSchedules = 1 THEN 'Y' ELSE 'N' END
             + ' steps=' + CASE WHEN @IncludeSteps = 1 THEN 'Y' ELSE 'N' END
             + ' command=' + CASE WHEN @IncludeCommandText = 1 THEN 'Y' ELSE 'N' END
-            + '  |  category filter: ' + LEFT(CAST(@CategoryFilter AS varchar(40)), 40)
+            + '  |  category filter: ' + LEFT(CAST(@CategoryPattern AS varchar(40)), 40)
             + @BlankLine, @ReportWidth)
 UNION ALL
 SELECT LEFT(@Divider, @ReportWidth)
@@ -920,7 +932,24 @@ SELECT ReportLine
  ORDER BY [LineNo]
 
 RETURN 0
+END
 GO
 
 PRINT 'Procedure dbo.ShowAgentJobReport created successfully.'
 GO
+
+/*
+  Usage examples (note the equals sign after each parameter name):
+
+    EXEC dbo.ShowAgentJobReport;
+
+    EXEC dbo.ShowAgentJobReport
+         @JobFilter   = N'%Backup%',
+         @EnabledOnly = 1;
+
+    EXEC dbo.ShowAgentJobReport
+         @JobFilter          = N'%',
+         @CategoryFilter     = N'%Database%',
+         @IncludeCommandText = 0,
+         @SortBy             = 'CATEGORY';
+*/
