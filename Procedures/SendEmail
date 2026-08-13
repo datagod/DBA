@@ -29,9 +29,9 @@ as
 -- Author:       William McEvoy
 -- Reason:       We now raise an error if To/From/Subject are empty
 ---------------------------------------------------------------------------------------------------
--- Date Revised: 
--- Author:       
--- Reason:       
+-- Date Revised: August 13, 2026
+-- Author:       Bill McEvoy
+-- Reason:       Remove hardcoded company email domain; resolve @EmailFrom from Database Mail accounts
 ---------------------------------------------------------------------------------------------------
 set nocount on
 
@@ -39,18 +39,19 @@ set nocount on
 -- Validate input parameters                                       --
 ---------------------------------------------------------------------
 
+-- Prefer Database Mail account address when @EmailFrom is not supplied (no hardcoded domain)
 IF (@EmailFrom is null or @EmailFrom = '')
-  select  @EmailFrom = '' 
-          + case 
-              when charindex('\',@@SERVERNAME) > 0 then left(@@SERVERNAME,charindex('\',@@SERVERNAME)) 
-              else @@SERVERNAME 
-            end
-          + '@core-mark.com'
-
+BEGIN
+  SELECT TOP (1)
+         @EmailFrom = a.email_address
+    FROM msdb.dbo.sysmail_account AS a
+   WHERE NULLIF(LTRIM(RTRIM(a.email_address)), '') IS NOT NULL
+   ORDER BY a.account_id
+END
 
 IF (@EmailTo is null or @EmailTo = '' or @Subject is null or @Subject = '')
 BEGIN
-  raiserror('SendMail encountered a problem.  Make sure To From and Subject are not empty',10,1)
+  raiserror('SendMail encountered a problem.  Make sure To and Subject are not empty',10,1)
   return -1
 END
        

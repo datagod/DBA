@@ -159,12 +159,18 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `CheckForHeaps` | `CheckForHeaps.sql` | Fast catalog-only heap scan |
 | `ShowHeaps` | `ShowHeaps.sql` | Full heap DMV analysis with clustered-index DDL |
 | `RecommendClusteredIndex` | `RecommendClusteredIndex.sql` | Single-table clustered index recommendation (identity-first) |
+| `ExamineQueryStore` | `ExamineQueryStore.sql` | Deep Query Store analysis with prioritized findings |
 | `ShowQueryStoreReport` | `ShowQueryStoreReport.sql` | Query Store report for one database |
 | `ShowQueryStoreWorkloadReport` | `ShowQueryStoreWorkloadReport.sql` | Instance-wide Query Store workload scan |
+| `QueryStoreStatus` | `QueryStoreStatus.sql` | Instance-wide Query Store configuration inventory |
+| `QueryStorePerformanceAnalysis` | `QueryStorePerformanceAnalysis.sql` | Query Store top queries and recent regressions (current DB) |
+| `RecommendIndexes` | `RecommendIndexes.sql` | Prioritized index recommendations from IndexAnalysis |
+| `SearchQueryStoreForObject` | `SearchQueryStoreForObject.sql` | Find Query Store queries for an object name |
 | `StartPerformanceTrace` | `StartPerformanceTrace.sql` | Start a filtered server-side trace |
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
+| `ShowAgentJobReport` | `ShowAgentJobReport.sql` | Fixed-width SQL Agent job, schedule, and step inventory |
 
 ### Common workflows
 
@@ -198,6 +204,24 @@ DECLARE @RunA uniqueidentifier, @RunB uniqueidentifier;
 EXEC dbo.ExamineDatabasePerformance @TargetDatabase = N'DatabaseA', @AnalysisRunID = @RunA OUTPUT;
 EXEC dbo.ExamineDatabasePerformance @TargetDatabase = N'DatabaseB', @AnalysisRunID = @RunB OUTPUT;
 EXEC dbo.CompareDatabasePerformance @AnalysisRunID_A = @RunA, @AnalysisRunID_B = @RunB;
+```
+
+**Query Store deep dive**
+
+```sql
+-- Prioritized findings: health, expensive queries, plan instability, missing indexes
+EXEC dbo.ExamineQueryStore @TargetDatabase = N'YourDatabase', @DaysBack = 7;
+
+-- Compact text report
+EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase', @SortBy = 'CPU';
+```
+
+**SQL Agent job inventory**
+
+```sql
+EXEC dbo.ShowAgentJobReport;
+EXEC dbo.ShowAgentJobReport @JobFilter = N'%Backup%', @EnabledOnly = 1;
+EXEC dbo.ShowAgentJobReport @IncludeCommandText = 0, @SortBy = 'CATEGORY';
 ```
 
 **Performance trace**

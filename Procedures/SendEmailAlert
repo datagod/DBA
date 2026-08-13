@@ -30,9 +30,9 @@ as
 --               communication with the mail server.
 --               
 ---------------------------------------------------------------------------------------------------
--- Date Revised: 
--- Author:       
--- Reason:       
+-- Date Revised: August 13, 2026
+-- Author:       Bill McEvoy
+-- Reason:       Remove hardcoded personal/company email fallbacks; require EmailList or Database Mail
 ---------------------------------------------------------------------------------------------------
 set nocount on
 
@@ -122,14 +122,27 @@ BEGIN
 END
 
 
--- Fill in defaults if still no value found
+-- Prefer Database Mail account when From is still unresolved (no hardcoded addresses)
 IF (@From = '' or @From is null)
-  select @From = 'noreply@xxxx.com'
+BEGIN
+  SELECT TOP (1)
+         @From = a.email_address
+    FROM msdb.dbo.sysmail_account AS a
+   WHERE NULLIF(LTRIM(RTRIM(a.email_address)), '') IS NOT NULL
+   ORDER BY a.account_id
+END
 
 IF (@To = '' or @To is null)
-  select @To = 'william.mcevoy@xxxx.com'
+BEGIN
+  RAISERROR('SendEmailAlert could not resolve a recipient. Configure EmailList (Description/EmailID) or pass valid @ToEmailDescription/@ToEmailID.', 16, 1)
+  RETURN
+END
 
-
+IF (@From = '' or @From is null)
+BEGIN
+  RAISERROR('SendEmailAlert could not resolve a From address. Configure EmailList, Database Mail accounts, or @FromEmailDescription/@FromEmailID.', 16, 1)
+  RETURN
+END
 
 ---------------------------------------------------------------------
 -- M A I N   P R O C E S S I N G                                   --

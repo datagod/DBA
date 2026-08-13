@@ -25,9 +25,9 @@ as
 --               
 --               
 ---------------------------------------------------------------------------------------------------
--- Date Revised: 
--- Author:       
--- Reason:       
+-- Date Revised: August 13, 2026
+-- Author:       Bill McEvoy
+-- Reason:       Remove hardcoded company email domain; resolve @EmailFrom from Database Mail accounts
 ---------------------------------------------------------------------------------------------------
 set nocount on
 
@@ -35,16 +35,28 @@ set nocount on
 -- Validate input parameters                                       --
 ---------------------------------------------------------------------
 
+-- Prefer Database Mail account address when @EmailFrom is not supplied (no hardcoded domain)
 IF (@EmailFrom is null or @EmailFrom = '')
-  select  @EmailFrom = 'SQL_' + upper(@@SERVERNAME) + '@BOLDstreet.com'
+BEGIN
+  SELECT TOP (1)
+         @EmailFrom = a.email_address
+    FROM msdb.dbo.sysmail_account AS a
+   WHERE NULLIF(LTRIM(RTRIM(a.email_address)), '') IS NOT NULL
+   ORDER BY a.account_id
+END
 
+IF (@EmailTo is null or @EmailTo = '' or @Subject is null or @Subject = '')
+BEGIN
+  RAISERROR('SendEmailQuery requires non-empty @EmailTo and @Subject.', 16, 1)
+  RETURN
+END
 
 ---------------------------------------------------------------------
 -- Declare and initialize local variables                          --
 ---------------------------------------------------------------------
 
 declare @profile_name varchar(100)
-select  @profile_name = [name] from msdb.dbo.sysmail_profile where profile_id = 1
+select  @profile_name = (select top 1 [name] from msdb.dbo.sysmail_profile order by profile_id)
 
 
 ---------------------------------------------------------------------
