@@ -23,7 +23,9 @@
     @ReturnResultSets        - return summary/findings/top-query result sets (default 1)
 
   Notes:
-    - Requires SQL Server 2016 (13.x)+ and target compatibility level 130+.
+    - Requires SQL Server 2016 (13.x)+ on the instance (Query Store host feature).
+    - Target database compatibility level may be below 130 (for example 100–120). Query Store is
+      an engine feature and is not blocked by target compatibility level when enabled.
     - Reads Query Store catalog views from the target via three-part names.
     - Missing-index recommendations come from sys.dm_db_missing_index_* (instance DMVs for the
       target database), not from Query Store plan XML; validate before creating indexes.
@@ -75,6 +77,8 @@ AS
 -- Description:  Deep Query Store analysis for a target database. Produces prioritized findings
 --               for Query Store health, expensive queries, plan instability, failed executions,
 --               forced-plan problems, wait categories, and missing-index opportunities.
+--               Supports target databases with compatibility level below 130 when Query Store
+--               is enabled on a SQL Server 2016+ instance.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -87,6 +91,7 @@ DECLARE
     @QuotedDatabase         nvarchar(260),
     @CompatibilityLevel     int,
     @IsQueryStoreOn         bit,
+    @InternalQueryFilter    nvarchar(200),
     @CaptureDate            datetime,
     @CutoffTime             datetimeoffset(7),
     @Sql                    nvarchar(max),
@@ -169,13 +174,16 @@ SELECT
   FROM sys.databases AS d
  WHERE d.database_id = @TargetDatabaseId
 
-IF @CompatibilityLevel < 130
-BEGIN
-    RAISERROR(
-        'Target database ''%s'' compatibility level %d is below 130. Query Store requires compatibility level 130 or higher.',
-        16, 1, @TargetDatabase, @CompatibilityLevel)
-    RETURN
-END
+/*
+  Query Store availability follows the host instance version (2016+), not the target database
+  compatibility level. Targets at 100–120 are supported when Query Store is enabled.
+
+  is_internal_query exists on SQL Server 2017+ catalog metadata; omit the filter on 2016.
+*/
+IF @MajorVersion >= 14
+    SET @InternalQueryFilter = N'AND ISNULL(q.is_internal_query, 0) = 0'
+ELSE
+    SET @InternalQueryFilter = N''
 
 SET @ProductVersion = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
 SET @Edition        = CAST(SERVERPROPERTY('Edition') AS varchar(64))
@@ -265,6 +273,27 @@ CREATE TABLE #WaitAgg
     TotalExecutionCount bigint        NOT NULL,
     AvgQueryWaitMs      float         NOT NULL
 )
+
+/* Informational: lower target compatibility does not block Query Store analysis */
+IF @CompatibilityLevel IS NOT NULL AND @CompatibilityLevel < 130
+BEGIN
+    INSERT INTO #Findings
+    (
+        PriorityScore, Severity, SeverityLabel, Category, ObjectName, QueryID, PlanID,
+        FindingDetail, SuggestedAction, MetricNumeric, MetricLabel, QueryTextShort
+    )
+    VALUES
+    (
+        350, 1, 'Info', 'QS_CONFIG', @TargetDatabase, NULL, NULL,
+        N'Target database compatibility level is '
+        + CAST(@CompatibilityLevel AS nvarchar(10))
+        + N' (below 130). Query Store still captures and reports on this database on SQL Server 2016+; '
+        + N'optimizer/CE behavior follows the lower compatibility level, which can differ from 130+ plans.',
+        N'No action required for ExamineQueryStore. Raise compatibility level only as part of a planned upgrade '
+        + N'after validating plan performance (Query Store is commonly used for that validation).',
+        @CompatibilityLevel, 'CompatibilityLevel', NULL
+    )
+END
 
 ---------------------------------------------------------------------------------------------------
 -- Query Store configuration
@@ -586,8 +615,8 @@ SET @Sql = N'
         ON p.query_id = q.query_id
     INNER JOIN ' + @QuotedDatabase + N'.sys.query_store_runtime_stats AS rs
         ON rs.plan_id = p.plan_id
-    WHERE ISNULL(q.is_internal_query, 0) = 0
-      AND rs.last_execution_time >= @CutoffTime
+    WHERE rs.last_execution_time >= @CutoffTime
+      ' + @InternalQueryFilter + N'
 )
 INSERT INTO #QueryAgg
 (
@@ -680,9 +709,9 @@ SET @Sql = N'
         ON p.query_id = q.query_id
     INNER JOIN ' + @QuotedDatabase + N'.sys.query_store_runtime_stats AS rs
         ON rs.plan_id = p.plan_id
-    WHERE ISNULL(q.is_internal_query, 0) = 0
-      AND rs.execution_type = 0
+    WHERE rs.execution_type = 0
       AND rs.last_execution_time >= @CutoffTime
+      ' + @InternalQueryFilter + N'
 )
 INSERT INTO #PlanAgg
 (

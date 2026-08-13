@@ -294,9 +294,10 @@ File: `ExamineQueryStore.sql`
 
 Stored procedure that performs a **deep Query Store analysis** of a target database and returns prioritized findings (health issues, expensive queries, plan instability, failures, waits, and missing-index opportunities). Complements the text-oriented `ShowQueryStoreReport` and the regression-focused `QueryStorePerformanceAnalysis`.
 
-- Requires SQL Server 2016 or later and compatibility level 130 or higher on the target database
+- Requires SQL Server 2016 or later on the instance; target database compatibility may be below 130 (for example 100–120) when Query Store is enabled
 - Reads Query Store catalog views from the target database via three-part names
 - Evaluates Query Store configuration (READ_ONLY, storage pressure, capture/cleanup modes, wait-stats capture)
+- Emits an informational finding when target compatibility is below 130 (analysis still runs)
 - Ranks expensive queries by total CPU, duration, logical reads, and physical I/O within a lookback window
 - Detects multi-plan instability (avg-duration variance across plans), duration outliers, forced-plan failures, and failed/aborted executions
 - Surfaces Query Store wait categories when wait-stats capture is available (SQL Server 2017+)
