@@ -1,0 +1,67 @@
+# OS / explorer
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# Editors and IDEs
+.vs/
+.vscode/
+*.code-workspace
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+.idea/
+*.swp
+*~
+
+# Local secrets and environment overrides (never commit)
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.key
+*.pem
+secrets/
+**/appsettings.*.local.json
+local.settings.json
+
+# SQL Server / tooling local artifacts
+*.bak
+*.trn
+*.diff
+*.trc
+*.xel
+*.mdf
+*.ldf
+*.ndf
+*.sqlplan
+*.rdl.data
+
+# Logs and temp output
+*.log
+logs/
+tmp/
+temp/
+out/
+output/
+
+# PowerShell local config / transcripts
+*.ps1xml
+Transcript_*.txt
+
+# Python / node accidental drops (if used for helpers)
+__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+
+# Grok / agent local scratch (if present under repo)
+.grok/
+*.review.md
+
+# MCP local tool cache (session tooling; not product source)
+mcps/

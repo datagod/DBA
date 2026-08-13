@@ -288,6 +288,63 @@ SELECT ObjectName, DisplayIndexName, IndexTypeDesc, KeyColumns, IncludedColumns,
 
 Note: usage statistics reset when the SQL Server instance restarts. Indexes with no row in `sys.dm_db_index_usage_stats` have had no recorded activity since the restart.
 
+### ExamineQueryStore
+
+File: `ExamineQueryStore.sql`
+
+Stored procedure that performs a **deep Query Store analysis** of a target database and returns prioritized findings (health issues, expensive queries, plan instability, failures, waits, and missing-index opportunities). Complements the text-oriented `ShowQueryStoreReport` and the regression-focused `QueryStorePerformanceAnalysis`.
+
+- Requires SQL Server 2016 or later and compatibility level 130 or higher on the target database
+- Reads Query Store catalog views from the target database via three-part names
+- Evaluates Query Store configuration (READ_ONLY, storage pressure, capture/cleanup modes, wait-stats capture)
+- Ranks expensive queries by total CPU, duration, logical reads, and physical I/O within a lookback window
+- Detects multi-plan instability (avg-duration variance across plans), duration outliers, forced-plan failures, and failed/aborted executions
+- Surfaces Query Store wait categories when wait-stats capture is available (SQL Server 2017+)
+- Includes missing-index DMV recommendations with suggested `CREATE INDEX` DDL (validate before applying)
+- Returns three result sets: `SUMMARY`, `FINDINGS`, and `TOP_QUERIES`
+- Does not persist results to a table
+
+Deployment:
+
+```sql
+-- Run ExamineQueryStore.sql in the tool database
+EXEC dbo.ExamineQueryStore @TargetDatabase = N'YourDatabase'
+EXEC dbo.ExamineQueryStore
+     @TargetDatabase = N'YourDatabase',
+     @DaysBack = 14,
+     @TopN = 50,
+     @MinExecutions = 10
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to analyze (default: current database)
+- `@DaysBack` — lookback window on `last_execution_time` (default `7`)
+- `@TopN` — maximum findings per category and top-query rows (default `25`)
+- `@MinExecutions` — minimum executions to include a query (default `5`)
+- `@PlanVarianceFactor` — multi-plan avg-duration ratio that triggers a plan-instability finding (default `2.0`)
+- `@OutlierFactor` — max/avg duration ratio that triggers an outlier finding (default `10.0`)
+- `@MinMissingIndexImpact` — minimum missing-index impact score to report (default `10000`)
+- `@IncludeMissingIndexes` — include live missing-index DMV findings (default `1`)
+- `@IncludeQueryText` — include short query text in findings and top queries (default `1`)
+- `@ReturnResultSets` — return summary/findings/top-query result sets (default `1`)
+
+Finding categories (examples):
+
+| Category | Meaning |
+|----------|---------|
+| `QS_CONFIG` | Query Store disabled, READ_ONLY, storage pressure, capture/cleanup issues |
+| `HIGH_CPU` / `HIGH_DURATION` / `HIGH_READS` / `PHYSICAL_IO` | Expensive workload contributors |
+| `PLAN_INSTABILITY` | Multiple plans with large avg-duration variance |
+| `DURATION_OUTLIER` | Max duration much higher than average |
+| `FORCED_PLAN` / `FORCED_PLAN_FAILURE` | Plan forcing inventory and failures |
+| `FAILED_EXECUTION` | Aborted/exception execution_type activity |
+| `ADHOC_BLOAT` | High share of ad-hoc queries |
+| `WAIT_CATEGORY` | Dominant Query Store wait categories |
+| `MISSING_INDEX` | High-impact missing-index DMV recommendations |
+
+Note: Missing-index suggestions come from `sys.dm_db_missing_index_*`, not from Query Store plan XML. Test generated DDL in a non-production window. For a compact on-screen text report, use `ShowQueryStoreReport`. For recent-vs-baseline regressions in the current database, use `QueryStorePerformanceAnalysis`.
+
 ### ShowQueryStoreReport
 
 File: `ShowQueryStoreReport.sql`
