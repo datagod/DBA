@@ -170,7 +170,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
-| `ShowAgentJobReport` | `ShowAgentJobReport.sql` | Fixed-width SQL Agent job, schedule, and step inventory |
+| `ShowAgentJobReport` | `ShowAgentJobReport.sql` | SQL Agent job/schedule/step inventory (Markdown default, TEXT optional) |
 
 ### Common workflows
 
@@ -219,9 +219,12 @@ EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase', @SortBy = 'CPU'
 **SQL Agent job inventory**
 
 ```sql
+-- Markdown for wiki (default) — copy the ReportLine column into the wiki page
 EXEC dbo.ShowAgentJobReport;
 EXEC dbo.ShowAgentJobReport @JobFilter = N'%Backup%', @EnabledOnly = 1;
-EXEC dbo.ShowAgentJobReport @IncludeCommandText = 0, @SortBy = 'CATEGORY';
+
+-- Fixed-width text for SSMS
+EXEC dbo.ShowAgentJobReport @OutputFormat = 'TEXT', @IncludeCommandText = 0, @SortBy = 'CATEGORY';
 ```
 
 **Performance trace**

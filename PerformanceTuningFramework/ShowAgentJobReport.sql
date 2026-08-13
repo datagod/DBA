@@ -5,9 +5,11 @@
   Deploy to the tool database, then execute:
     EXEC dbo.ShowAgentJobReport
     EXEC dbo.ShowAgentJobReport @JobFilter = N'%Backup%', @EnabledOnly = 1
+    EXEC dbo.ShowAgentJobReport @OutputFormat = 'TEXT'   -- classic fixed-width
 
-  Produces a fixed-width text report of SQL Agent jobs, schedules, and job steps
-  (subsystem, database, success/fail flow, and optional command text).
+  Produces a SQL Agent job inventory (jobs, schedules, steps). Default output is
+  Markdown suitable for wiki paste (Azure DevOps / GitHub-flavored). Use
+  @OutputFormat = 'TEXT' for the fixed-width SSMS-friendly layout.
 
   Optional parameters:
     @JobFilter           - LIKE filter for job name (default '%')
@@ -18,13 +20,15 @@
     @IncludeCommandText  - include truncated step command text (default 1)
     @MaxCommandLength    - max command characters shown per step (default 160)
     @SortBy              - NAME | CATEGORY | OWNER | ENABLED (default NAME)
-    @ReportWidth         - kept for compatibility; layout fixed at 120 characters
+    @OutputFormat        - MARKDOWN (default) | TEXT
+    @ReportWidth         - TEXT mode only; layout fixed at 120 characters
 
   Notes:
     - Reads msdb SQL Agent catalog views (instance-scoped).
     - Procedure deployment is compatibility level 100 safe (no CREATE OR ALTER).
     - Requires permission to read msdb job metadata (typically SQLAgentReaderRole
       or equivalent / sysadmin).
+    - Markdown mode returns one row per line; copy the ReportLine column into the wiki.
 */
 
 SET ANSI_NULLS ON
@@ -62,16 +66,20 @@ ALTER PROCEDURE dbo.ShowAgentJobReport
     @IncludeCommandText bit           = 1,
     @MaxCommandLength   int           = 160,
     @SortBy             varchar(20)   = 'NAME',
+    @OutputFormat       varchar(20)   = 'MARKDOWN',
     @ReportWidth        tinyint       = 120
 )
 AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: August 13, 2026
 -- Author:       Bill McEvoy
--- Description:  Fixed-width SQL Agent job inventory report: jobs, schedules, and job steps
---               with subsystem, database context, flow control, and optional command text.
+-- Description:  SQL Agent job inventory report: jobs, schedules, and job steps with subsystem,
+--               database context, flow control, and optional command text. Default output is
+--               Markdown for wiki paste; TEXT mode retains the fixed-width layout.
 -- Date Revised: August 13, 2026
 -- Reason:       Use nvarchar filters (not sysname) for LIKE patterns; normalize filter locals.
+-- Date Revised: August 13, 2026
+-- Reason:       Add @OutputFormat (MARKDOWN default, TEXT optional) for wiki-ready reports.
 ---------------------------------------------------------------------------------------------------
 BEGIN
 SET NOCOUNT ON
@@ -87,8 +95,18 @@ DECLARE
     @BlankLine        varchar(120),
     @LineNo           int,
     @SortByUpper      varchar(20),
+    @FormatUpper      varchar(20),
     @JobNamePattern   nvarchar(256),
     @CategoryPattern  nvarchar(256),
+    @MdJobName        nvarchar(300),
+    @MdCategory       nvarchar(300),
+    @MdOwner          nvarchar(300),
+    @MdDescription    nvarchar(600),
+    @MdSchedName      nvarchar(300),
+    @MdStepName       nvarchar(300),
+    @MdSubsystem      nvarchar(100),
+    @MdDatabase       nvarchar(300),
+    @MdCommand        nvarchar(max),
     @TotalJobs        int,
     @EnabledJobs      int,
     @DisabledJobs     int,
@@ -158,9 +176,19 @@ IF @MaxCommandLength > 400
 
 SET @ReportWidth = 120
 SET @SortByUpper = UPPER(LTRIM(RTRIM(ISNULL(@SortBy, 'NAME'))))
+SET @FormatUpper = UPPER(LTRIM(RTRIM(ISNULL(@OutputFormat, 'MARKDOWN'))))
 
 IF @SortByUpper NOT IN ('NAME', 'CATEGORY', 'OWNER', 'ENABLED')
     SET @SortByUpper = 'NAME'
+
+IF @FormatUpper NOT IN ('MARKDOWN', 'MD', 'TEXT', 'FIXED', 'WIDTH')
+    SET @FormatUpper = 'MARKDOWN'
+
+IF @FormatUpper IN ('MD')
+    SET @FormatUpper = 'MARKDOWN'
+
+IF @FormatUpper IN ('FIXED', 'WIDTH')
+    SET @FormatUpper = 'TEXT'
 
 SET @ProductVersion = CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))
 SET @ProductLevel   = CAST(SERVERPROPERTY('ProductLevel') AS varchar(30))
@@ -246,8 +274,8 @@ IF OBJECT_ID('tempdb..#Report') IS NOT NULL
 
 CREATE TABLE #Report
 (
-    [LineNo]   int          NOT NULL IDENTITY(1, 1) PRIMARY KEY,
-    ReportLine varchar(200) NOT NULL
+    [LineNo]   int            NOT NULL IDENTITY(1, 1) PRIMARY KEY,
+    ReportLine nvarchar(max)  NOT NULL
 )
 
 ---------------------------------------------------------------------------------------------------
@@ -600,332 +628,618 @@ BEGIN
 END
 
 ---------------------------------------------------------------------------------------------------
--- Build report header
+-- Build report (MARKDOWN default, or fixed-width TEXT)
 ---------------------------------------------------------------------------------------------------
-INSERT INTO #Report (ReportLine)
-SELECT LEFT(@HeaderRule, @ReportWidth)
-UNION ALL
-SELECT LEFT(' SQL AGENT JOB REPORT' + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Server: ' + @ServerName
-            + '  ' + @ReportTime + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' SQL Server ' + @ProductVersion + ' ' + ISNULL(@ProductLevel, '')
-            + '  |  ' + LEFT(ISNULL(@Edition, ''), 28) + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(@HeaderRule, @ReportWidth)
-UNION ALL
-SELECT LEFT(' SUMMARY' + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(@Divider, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Jobs: ' + CAST(@TotalJobs AS varchar(10))
-            + ' total  |  ' + CAST(@EnabledJobs AS varchar(10)) + ' enabled'
-            + '  |  ' + CAST(@DisabledJobs AS varchar(10)) + ' disabled'
-            + '  |  ' + CAST(@RunningJobs AS varchar(10)) + ' running now'
-            + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Schedules: ' + CAST(@TotalSchedules AS varchar(10))
-            + ' linked  |  ' + CAST(@ScheduledJobs AS varchar(10)) + ' jobs with schedule'
-            + '  |  ' + CAST(@UnscheduledJobs AS varchar(10)) + ' without schedule'
-            + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Steps: ' + CAST(@TotalSteps AS varchar(10))
-            + '  |  last-run failed (outcome): ' + CAST(@FailedLastRun AS varchar(10))
-            + '  |  filter job: ' + LEFT(CAST(@JobNamePattern AS varchar(40)), 40)
-            + '  |  sort: ' + @SortByUpper
-            + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Options: schedules=' + CASE WHEN @IncludeSchedules = 1 THEN 'Y' ELSE 'N' END
-            + ' steps=' + CASE WHEN @IncludeSteps = 1 THEN 'Y' ELSE 'N' END
-            + ' command=' + CASE WHEN @IncludeCommandText = 1 THEN 'Y' ELSE 'N' END
-            + '  |  category filter: ' + LEFT(CAST(@CategoryPattern AS varchar(40)), 40)
-            + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(@Divider, @ReportWidth)
-
-IF @TotalJobs = 0
+IF @FormatUpper = 'MARKDOWN'
 BEGIN
+    /* ----- Markdown header + summary ----- */
     INSERT INTO #Report (ReportLine)
-    SELECT LEFT(' No SQL Agent jobs matched the current filters.' + @BlankLine, @ReportWidth)
-    UNION ALL
-    SELECT LEFT(@HeaderRule, @ReportWidth)
+    SELECT N'# SQL Agent Job Report'
+    UNION ALL SELECT N''
+    UNION ALL SELECT N'| Field | Value |'
+    UNION ALL SELECT N'| --- | --- |'
+    UNION ALL SELECT N'| Server | ' + REPLACE(ISNULL(CAST(@ServerName AS nvarchar(256)), N''), N'|', N'/') + N' |'
+    UNION ALL SELECT N'| Generated | ' + @ReportTime + N' |'
+    UNION ALL SELECT N'| SQL Server | ' + REPLACE(ISNULL(@ProductVersion, N'') + N' ' + ISNULL(@ProductLevel, N''), N'|', N'/') + N' |'
+    UNION ALL SELECT N'| Edition | ' + REPLACE(ISNULL(@Edition, N''), N'|', N'/') + N' |'
+    UNION ALL SELECT N'| Job filter | `' + REPLACE(@JobNamePattern, N'|', N'/') + N'` |'
+    UNION ALL SELECT N'| Category filter | `' + REPLACE(@CategoryPattern, N'|', N'/') + N'` |'
+    UNION ALL SELECT N'| Sort | ' + @SortByUpper + N' |'
+    UNION ALL SELECT N'| Enabled only | ' + CASE WHEN @EnabledOnly = 1 THEN N'Yes' ELSE N'No' END + N' |'
+    UNION ALL SELECT N''
+    UNION ALL SELECT N'## Summary'
+    UNION ALL SELECT N''
+    UNION ALL SELECT N'| Metric | Count |'
+    UNION ALL SELECT N'| --- | ---: |'
+    UNION ALL SELECT N'| Total jobs | ' + CAST(@TotalJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Enabled | ' + CAST(@EnabledJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Disabled | ' + CAST(@DisabledJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Running now | ' + CAST(@RunningJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Jobs with schedule | ' + CAST(@ScheduledJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Jobs without schedule | ' + CAST(@UnscheduledJobs AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Linked schedules | ' + CAST(@TotalSchedules AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Total steps | ' + CAST(@TotalSteps AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N'| Last-run failed (outcome) | ' + CAST(@FailedLastRun AS nvarchar(20)) + N' |'
+    UNION ALL SELECT N''
 
-    SELECT ReportLine
-      FROM #Report
-     ORDER BY [LineNo]
+    IF @TotalJobs = 0
+    BEGIN
+        INSERT INTO #Report (ReportLine)
+        SELECT N'> No SQL Agent jobs matched the current filters.'
+        UNION ALL SELECT N''
+        UNION ALL SELECT N'---'
+        UNION ALL SELECT N'*Report generated by `dbo.ShowAgentJobReport`.*'
 
-    RETURN 0
-END
+        SELECT ReportLine
+          FROM #Report
+         ORDER BY [LineNo]
 
----------------------------------------------------------------------------------------------------
--- Per-job sections
----------------------------------------------------------------------------------------------------
-DECLARE job_cursor CURSOR LOCAL FAST_FORWARD FOR
+        RETURN 0
+    END
+
+    /* ----- Markdown inventory table ----- */
+    INSERT INTO #Report (ReportLine)
+    SELECT N'## Job inventory'
+    UNION ALL SELECT N''
+    UNION ALL SELECT N'| Job | Enabled | Running | Category | Owner | Steps | Schedules | Last run | When | Duration |'
+    UNION ALL SELECT N'| --- | --- | --- | --- | --- | ---: | ---: | --- | --- | --- |'
+
+    INSERT INTO #Report (ReportLine)
     SELECT
-        JobId,
-        JobName,
-        JobEnabled,
-        CategoryName,
-        OwnerName,
-        Description,
-        DateCreated,
-        DateModified,
-        StartStepId,
-        NotifyLevelEmail,
-        DeleteLevel,
-        StepCount,
-        ScheduleCount,
-        LastRunOutcome,
-        LastRunDateTime,
-        LastRunDuration,
-        IsRunning,
-        CurrentStepName
-      FROM #Jobs
-     ORDER BY SortOrder
-
-OPEN job_cursor
-
-FETCH NEXT FROM job_cursor INTO
-    @JobId, @JobName, @JobEnabled, @CategoryName, @OwnerName, @Description,
-    @DateCreated, @DateModified, @StartStepId, @NotifyLevelEmail, @DeleteLevel,
-    @StepCount, @ScheduleCount, @LastRunOutcome, @LastRunDateTime, @LastRunDuration,
-    @IsRunning, @CurrentStepName
-
-WHILE @@FETCH_STATUS = 0
-BEGIN
-    INSERT INTO #Report (ReportLine)
-    SELECT LEFT(@BlankLine, @ReportWidth)
-    UNION ALL
-    SELECT LEFT(@HeaderRule, @ReportWidth)
-    UNION ALL
-    SELECT LEFT(
-               ' JOB: ' + LEFT(CAST(@JobName AS varchar(80)), 70)
-               + '  [' + CASE WHEN @JobEnabled = 1 THEN 'Enabled' ELSE 'DISABLED' END + ']'
-               + CASE WHEN @IsRunning = 1 THEN '  ** RUNNING **' ELSE '' END
-               + @BlankLine,
-               @ReportWidth)
-    UNION ALL
-    SELECT LEFT(
-               ' Category: ' + LEFT(ISNULL(CAST(@CategoryName AS varchar(40)), '(none)'), 28)
-               + '  Owner: ' + LEFT(ISNULL(CAST(@OwnerName AS varchar(40)), '(unknown)'), 28)
-               + '  Start step: ' + CAST(ISNULL(@StartStepId, 1) AS varchar(10))
-               + @BlankLine,
-               @ReportWidth)
-    UNION ALL
-    SELECT LEFT(
-               ' Created: ' + ISNULL(CONVERT(varchar(19), @DateCreated, 120), 'n/a')
-               + '  Modified: ' + ISNULL(CONVERT(varchar(19), @DateModified, 120), 'n/a')
-               + '  Steps: ' + CAST(@StepCount AS varchar(10))
-               + '  Schedules: ' + CAST(@ScheduleCount AS varchar(10))
-               + @BlankLine,
-               @ReportWidth)
-    UNION ALL
-    SELECT LEFT(
-               ' Last run: ' + ISNULL(@LastRunOutcome, 'Never run')
-               + CASE WHEN @LastRunDateTime IS NOT NULL THEN ' at ' + @LastRunDateTime ELSE '' END
-               + CASE WHEN @LastRunDuration IS NOT NULL THEN '  duration ' + @LastRunDuration ELSE '' END
-               + CASE WHEN @IsRunning = 1
-                      THEN '  current step: ' + LEFT(ISNULL(CAST(@CurrentStepName AS varchar(40)), '?'), 40)
-                      ELSE ''
-                 END
-               + @BlankLine,
-               @ReportWidth)
-
-    IF NULLIF(LTRIM(RTRIM(ISNULL(@Description, N''))), N'') IS NOT NULL
-       AND UPPER(LTRIM(RTRIM(@Description))) NOT IN (N'NO DESCRIPTION AVAILABLE.', N'NO DESCRIPTION AVAILABLE')
-    BEGIN
-        INSERT INTO #Report (ReportLine)
-        SELECT LEFT(' Description: ' + LEFT(REPLACE(REPLACE(REPLACE(
-                     CAST(@Description AS varchar(200)), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 100)
-                    + @BlankLine, @ReportWidth)
-    END
+        N'| '
+        + REPLACE(REPLACE(REPLACE(CAST(j.JobName AS nvarchar(256)), N'|', N'/'), NCHAR(13), N' '), NCHAR(10), N' ')
+        + N' | '
+        + CASE WHEN j.JobEnabled = 1 THEN N'Yes' ELSE N'**No**' END
+        + N' | '
+        + CASE WHEN j.IsRunning = 1 THEN N'**Yes**' ELSE N'No' END
+        + N' | '
+        + REPLACE(ISNULL(CAST(j.CategoryName AS nvarchar(128)), N'(none)'), N'|', N'/')
+        + N' | '
+        + REPLACE(ISNULL(CAST(j.OwnerName AS nvarchar(128)), N'(unknown)'), N'|', N'/')
+        + N' | '
+        + CAST(j.StepCount AS nvarchar(20))
+        + N' | '
+        + CAST(j.ScheduleCount AS nvarchar(20))
+        + N' | '
+        + ISNULL(j.LastRunOutcome, N'Never run')
+        + N' | '
+        + ISNULL(j.LastRunDateTime, N'')
+        + N' | '
+        + ISNULL(j.LastRunDuration, N'')
+        + N' |'
+      FROM #Jobs AS j
+     ORDER BY j.SortOrder
 
     INSERT INTO #Report (ReportLine)
-    SELECT LEFT(@Divider, @ReportWidth)
+    SELECT N''
+    UNION ALL SELECT N'## Job details'
+    UNION ALL SELECT N''
 
-    /* Schedules (emit each schedule's lines together) */
-    IF @IncludeSchedules = 1
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM #Schedules WHERE JobId = @JobId)
-        BEGIN
-            INSERT INTO #Report (ReportLine)
-            SELECT LEFT(' SCHEDULES: (none attached)' + @BlankLine, @ReportWidth)
-        END
-        ELSE
-        BEGIN
-            INSERT INTO #Report (ReportLine)
-            SELECT LEFT(' SCHEDULES' + @BlankLine, @ReportWidth)
+    /* ----- Per-job markdown sections ----- */
+    DECLARE job_cursor CURSOR LOCAL FAST_FORWARD FOR
+        SELECT
+            JobId, JobName, JobEnabled, CategoryName, OwnerName, Description,
+            DateCreated, DateModified, StartStepId, NotifyLevelEmail, DeleteLevel,
+            StepCount, ScheduleCount, LastRunOutcome, LastRunDateTime, LastRunDuration,
+            IsRunning, CurrentStepName
+          FROM #Jobs
+         ORDER BY SortOrder
 
-            DECLARE sched_cursor CURSOR LOCAL FAST_FORWARD FOR
-                SELECT
-                    ScheduleName,
-                    ScheduleEnabled,
-                    Frequency,
-                    IntervalText,
-                    TimeText,
-                    ActiveWindow,
-                    NextRunText
-                  FROM #Schedules
-                 WHERE JobId = @JobId
-                 ORDER BY ScheduleName, ScheduleId
-
-            OPEN sched_cursor
-            FETCH NEXT FROM sched_cursor INTO
-                @SchedName, @SchedEnabled, @SchedFrequency, @SchedInterval,
-                @SchedTime, @SchedWindow, @SchedNext
-
-            WHILE @@FETCH_STATUS = 0
-            BEGIN
-                INSERT INTO #Report (ReportLine)
-                SELECT LEFT(
-                           '  * '
-                           + LEFT(ISNULL(CAST(@SchedName AS varchar(40)), '(unnamed)') + @BlankLine, 28)
-                           + ' [' + CASE WHEN @SchedEnabled = 1 THEN 'On' ELSE 'Off' END + '] '
-                           + LEFT(@SchedFrequency + @BlankLine, 18)
-                           + ' '
-                           + LEFT(@SchedInterval + @BlankLine, 28)
-                           + ' '
-                           + LEFT(@SchedTime + @BlankLine, 30),
-                           @ReportWidth)
-                UNION ALL
-                SELECT LEFT(
-                           '    window: ' + @SchedWindow
-                           + '  next run: ' + @SchedNext
-                           + @BlankLine,
-                           @ReportWidth)
-
-                FETCH NEXT FROM sched_cursor INTO
-                    @SchedName, @SchedEnabled, @SchedFrequency, @SchedInterval,
-                    @SchedTime, @SchedWindow, @SchedNext
-            END
-
-            CLOSE sched_cursor
-            DEALLOCATE sched_cursor
-        END
-
-        INSERT INTO #Report (ReportLine)
-        SELECT LEFT(@Divider, @ReportWidth)
-    END
-
-    /* Steps (emit each step's lines together) */
-    IF @IncludeSteps = 1
-    BEGIN
-        IF NOT EXISTS (SELECT 1 FROM #Steps WHERE JobId = @JobId)
-        BEGIN
-            INSERT INTO #Report (ReportLine)
-            SELECT LEFT(' STEPS: (none defined)' + @BlankLine, @ReportWidth)
-        END
-        ELSE
-        BEGIN
-            INSERT INTO #Report (ReportLine)
-            SELECT LEFT(' STEPS' + @BlankLine, @ReportWidth)
-
-            DECLARE step_cursor CURSOR LOCAL FAST_FORWARD FOR
-                SELECT
-                    StepId,
-                    StepName,
-                    Subsystem,
-                    DatabaseName,
-                    DatabaseUserName,
-                    OnSuccessAction,
-                    OnFailAction,
-                    RetryAttempts,
-                    RetryInterval,
-                    ProxyName,
-                    CommandText
-                  FROM #Steps
-                 WHERE JobId = @JobId
-                 ORDER BY StepId
-
-            OPEN step_cursor
-            FETCH NEXT FROM step_cursor INTO
-                @StepId, @StepName, @Subsystem, @StepDatabase, @StepDbUser,
-                @OnSuccess, @OnFail, @RetryAttempts, @RetryInterval, @ProxyName, @CommandText
-
-            WHILE @@FETCH_STATUS = 0
-            BEGIN
-                INSERT INTO #Report (ReportLine)
-                SELECT LEFT(
-                           '  '
-                           + RIGHT('  ' + CAST(@StepId AS varchar(4)), 2)
-                           + '. '
-                           + LEFT(CAST(@StepName AS varchar(40)) + @BlankLine, 34)
-                           + ' ['
-                           + LEFT(CAST(@Subsystem AS varchar(16)) + @BlankLine, 12)
-                           + '] DB='
-                           + LEFT(ISNULL(CAST(@StepDatabase AS varchar(30)), '-') + @BlankLine, 20)
-                           + ' ok->'
-                           + LEFT(@OnSuccess + @BlankLine, 14)
-                           + ' fail->'
-                           + LEFT(@OnFail + @BlankLine, 12),
-                           @ReportWidth)
-
-                IF @RetryAttempts > 0
-                   OR @ProxyName IS NOT NULL
-                   OR NULLIF(@StepDbUser, N'') IS NOT NULL
-                BEGIN
-                    INSERT INTO #Report (ReportLine)
-                    SELECT LEFT(
-                               '     retry=' + CAST(@RetryAttempts AS varchar(6))
-                               + 'x/' + CAST(@RetryInterval AS varchar(6)) + 'min'
-                               + CASE WHEN @ProxyName IS NOT NULL
-                                      THEN '  proxy=' + LEFT(CAST(@ProxyName AS varchar(40)), 30)
-                                      ELSE ''
-                                 END
-                               + CASE WHEN NULLIF(@StepDbUser, N'') IS NOT NULL
-                                      THEN '  runas=' + LEFT(CAST(@StepDbUser AS varchar(40)), 30)
-                                      ELSE ''
-                                 END
-                               + @BlankLine,
-                               @ReportWidth)
-                END
-
-                IF @IncludeCommandText = 1
-                   AND NULLIF(LTRIM(RTRIM(ISNULL(@CommandText, N''))), N'') IS NOT NULL
-                BEGIN
-                    INSERT INTO #Report (ReportLine)
-                    SELECT LEFT(
-                               '     cmd: '
-                               + LEFT(ISNULL(CAST(@CommandText AS varchar(200)), '(empty)') + @BlankLine, @MaxCommandLength)
-                               + CASE
-                                     WHEN LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength THEN '...'
-                                     ELSE ''
-                                 END
-                               + @BlankLine,
-                               @ReportWidth)
-                END
-
-                FETCH NEXT FROM step_cursor INTO
-                    @StepId, @StepName, @Subsystem, @StepDatabase, @StepDbUser,
-                    @OnSuccess, @OnFail, @RetryAttempts, @RetryInterval, @ProxyName, @CommandText
-            END
-
-            CLOSE step_cursor
-            DEALLOCATE step_cursor
-        END
-    END
-
+    OPEN job_cursor
     FETCH NEXT FROM job_cursor INTO
         @JobId, @JobName, @JobEnabled, @CategoryName, @OwnerName, @Description,
         @DateCreated, @DateModified, @StartStepId, @NotifyLevelEmail, @DeleteLevel,
         @StepCount, @ScheduleCount, @LastRunOutcome, @LastRunDateTime, @LastRunDuration,
         @IsRunning, @CurrentStepName
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        SET @MdJobName = REPLACE(REPLACE(REPLACE(CAST(@JobName AS nvarchar(256)), N'|', N'/'), NCHAR(13), N' '), NCHAR(10), N' ')
+        SET @MdCategory = REPLACE(ISNULL(CAST(@CategoryName AS nvarchar(128)), N'(none)'), N'|', N'/')
+        SET @MdOwner = REPLACE(ISNULL(CAST(@OwnerName AS nvarchar(128)), N'(unknown)'), N'|', N'/')
+        SET @MdDescription = REPLACE(REPLACE(REPLACE(REPLACE(
+                ISNULL(CAST(@Description AS nvarchar(512)), N''),
+                N'|', N'/'), NCHAR(13), N' '), NCHAR(10), N' '), NCHAR(9), N' ')
+
+        INSERT INTO #Report (ReportLine)
+        SELECT N'### ' + @MdJobName
+               + CASE WHEN @JobEnabled = 1 THEN N'' ELSE N' *(disabled)*' END
+               + CASE WHEN @IsRunning = 1 THEN N' — **RUNNING**' ELSE N'' END
+        UNION ALL SELECT N''
+        UNION ALL SELECT N'| Property | Value |'
+        UNION ALL SELECT N'| --- | --- |'
+        UNION ALL SELECT N'| Enabled | ' + CASE WHEN @JobEnabled = 1 THEN N'Yes' ELSE N'No' END + N' |'
+        UNION ALL SELECT N'| Category | ' + @MdCategory + N' |'
+        UNION ALL SELECT N'| Owner | ' + @MdOwner + N' |'
+        UNION ALL SELECT N'| Start step | ' + CAST(ISNULL(@StartStepId, 1) AS nvarchar(20)) + N' |'
+        UNION ALL SELECT N'| Steps | ' + CAST(@StepCount AS nvarchar(20)) + N' |'
+        UNION ALL SELECT N'| Schedules | ' + CAST(@ScheduleCount AS nvarchar(20)) + N' |'
+        UNION ALL SELECT N'| Created | ' + ISNULL(CONVERT(nvarchar(19), @DateCreated, 120), N'n/a') + N' |'
+        UNION ALL SELECT N'| Modified | ' + ISNULL(CONVERT(nvarchar(19), @DateModified, 120), N'n/a') + N' |'
+        UNION ALL SELECT N'| Last run outcome | ' + ISNULL(@LastRunOutcome, N'Never run') + N' |'
+        UNION ALL SELECT N'| Last run time | ' + ISNULL(@LastRunDateTime, N'') + N' |'
+        UNION ALL SELECT N'| Last run duration | ' + ISNULL(@LastRunDuration, N'') + N' |'
+        UNION ALL SELECT N'| Currently running | '
+               + CASE WHEN @IsRunning = 1
+                      THEN N'Yes (step: ' + REPLACE(ISNULL(CAST(@CurrentStepName AS nvarchar(128)), N'?'), N'|', N'/') + N')'
+                      ELSE N'No'
+                 END + N' |'
+
+        IF NULLIF(LTRIM(RTRIM(@MdDescription)), N'') IS NOT NULL
+           AND UPPER(LTRIM(RTRIM(@MdDescription))) NOT IN (N'NO DESCRIPTION AVAILABLE.', N'NO DESCRIPTION AVAILABLE')
+        BEGIN
+            INSERT INTO #Report (ReportLine)
+            SELECT N'| Description | ' + @MdDescription + N' |'
+        END
+
+        INSERT INTO #Report (ReportLine)
+        SELECT N''
+
+        IF @IncludeSchedules = 1
+        BEGIN
+            INSERT INTO #Report (ReportLine)
+            SELECT N'#### Schedules'
+            UNION ALL SELECT N''
+
+            IF NOT EXISTS (SELECT 1 FROM #Schedules WHERE JobId = @JobId)
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT N'*No schedules attached.*'
+                UNION ALL SELECT N''
+            END
+            ELSE
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT N'| Name | Enabled | Frequency | Interval | Time | Window | Next run |'
+                UNION ALL SELECT N'| --- | --- | --- | --- | --- | --- | --- |'
+
+                INSERT INTO #Report (ReportLine)
+                SELECT
+                    N'| '
+                    + REPLACE(ISNULL(CAST(s.ScheduleName AS nvarchar(128)), N'(unnamed)'), N'|', N'/')
+                    + N' | '
+                    + CASE WHEN s.ScheduleEnabled = 1 THEN N'On' ELSE N'Off' END
+                    + N' | '
+                    + REPLACE(s.Frequency, N'|', N'/')
+                    + N' | '
+                    + REPLACE(s.IntervalText, N'|', N'/')
+                    + N' | '
+                    + REPLACE(s.TimeText, N'|', N'/')
+                    + N' | '
+                    + REPLACE(s.ActiveWindow, N'|', N'/')
+                    + N' | '
+                    + REPLACE(s.NextRunText, N'|', N'/')
+                    + N' |'
+                  FROM #Schedules AS s
+                 WHERE s.JobId = @JobId
+                 ORDER BY s.ScheduleName, s.ScheduleId
+
+                INSERT INTO #Report (ReportLine)
+                SELECT N''
+            END
+        END
+
+        IF @IncludeSteps = 1
+        BEGIN
+            INSERT INTO #Report (ReportLine)
+            SELECT N'#### Steps'
+            UNION ALL SELECT N''
+
+            IF NOT EXISTS (SELECT 1 FROM #Steps WHERE JobId = @JobId)
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT N'*No steps defined.*'
+                UNION ALL SELECT N''
+            END
+            ELSE
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT N'| # | Name | Subsystem | Database | On success | On fail | Retry | Proxy / run-as |'
+                UNION ALL SELECT N'| ---: | --- | --- | --- | --- | --- | --- | --- |'
+
+                INSERT INTO #Report (ReportLine)
+                SELECT
+                    N'| '
+                    + CAST(st.StepId AS nvarchar(10))
+                    + N' | '
+                    + REPLACE(CAST(st.StepName AS nvarchar(128)), N'|', N'/')
+                    + N' | '
+                    + REPLACE(CAST(st.Subsystem AS nvarchar(40)), N'|', N'/')
+                    + N' | '
+                    + REPLACE(ISNULL(CAST(st.DatabaseName AS nvarchar(128)), N'-'), N'|', N'/')
+                    + N' | '
+                    + REPLACE(st.OnSuccessAction, N'|', N'/')
+                    + N' | '
+                    + REPLACE(st.OnFailAction, N'|', N'/')
+                    + N' | '
+                    + CASE
+                          WHEN st.RetryAttempts > 0
+                              THEN CAST(st.RetryAttempts AS nvarchar(10)) + N'x / '
+                                   + CAST(st.RetryInterval AS nvarchar(10)) + N' min'
+                          ELSE N'-'
+                      END
+                    + N' | '
+                    + CASE
+                          WHEN st.ProxyName IS NOT NULL OR NULLIF(st.DatabaseUserName, N'') IS NOT NULL
+                              THEN REPLACE(ISNULL(CAST(st.ProxyName AS nvarchar(128)), N''), N'|', N'/')
+                                   + CASE
+                                         WHEN st.ProxyName IS NOT NULL AND NULLIF(st.DatabaseUserName, N'') IS NOT NULL
+                                             THEN N' / '
+                                         ELSE N''
+                                     END
+                                   + REPLACE(ISNULL(CAST(st.DatabaseUserName AS nvarchar(128)), N''), N'|', N'/')
+                          ELSE N'-'
+                      END
+                    + N' |'
+                  FROM #Steps AS st
+                 WHERE st.JobId = @JobId
+                 ORDER BY st.StepId
+
+                INSERT INTO #Report (ReportLine)
+                SELECT N''
+
+                IF @IncludeCommandText = 1
+                   AND EXISTS (
+                           SELECT 1
+                             FROM #Steps AS st
+                            WHERE st.JobId = @JobId
+                              AND NULLIF(LTRIM(RTRIM(ISNULL(st.CommandText, N''))), N'') IS NOT NULL
+                       )
+                BEGIN
+                    INSERT INTO #Report (ReportLine)
+                    SELECT N'##### Step commands'
+                    UNION ALL SELECT N''
+
+                    DECLARE step_cursor CURSOR LOCAL FAST_FORWARD FOR
+                        SELECT StepId, StepName, CommandText
+                          FROM #Steps
+                         WHERE JobId = @JobId
+                           AND NULLIF(LTRIM(RTRIM(ISNULL(CommandText, N''))), N'') IS NOT NULL
+                         ORDER BY StepId
+
+                    OPEN step_cursor
+                    FETCH NEXT FROM step_cursor INTO @StepId, @StepName, @CommandText
+
+                    WHILE @@FETCH_STATUS = 0
+                    BEGIN
+                        SET @MdStepName = REPLACE(CAST(@StepName AS nvarchar(128)), N'|', N'/')
+                        SET @MdCommand = REPLACE(REPLACE(ISNULL(@CommandText, N''), NCHAR(13), N' '), NCHAR(10), N' ')
+                        /* Avoid breaking fenced blocks if command contains triple backticks */
+                        SET @MdCommand = REPLACE(@MdCommand, N'```', N'[...]')
+
+                        INSERT INTO #Report (ReportLine)
+                        SELECT N'**Step ' + CAST(@StepId AS nvarchar(10)) + N' — ' + @MdStepName + N'**'
+                        UNION ALL SELECT N''
+                        UNION ALL SELECT N'```sql'
+                        UNION ALL SELECT @MdCommand
+                                   + CASE WHEN LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength THEN N' ...' ELSE N'' END
+                        UNION ALL SELECT N'```'
+                        UNION ALL SELECT N''
+
+                        FETCH NEXT FROM step_cursor INTO @StepId, @StepName, @CommandText
+                    END
+
+                    CLOSE step_cursor
+                    DEALLOCATE step_cursor
+                END
+            END
+        END
+
+        INSERT INTO #Report (ReportLine)
+        SELECT N'---'
+        UNION ALL SELECT N''
+
+        FETCH NEXT FROM job_cursor INTO
+            @JobId, @JobName, @JobEnabled, @CategoryName, @OwnerName, @Description,
+            @DateCreated, @DateModified, @StartStepId, @NotifyLevelEmail, @DeleteLevel,
+            @StepCount, @ScheduleCount, @LastRunOutcome, @LastRunDateTime, @LastRunDuration,
+            @IsRunning, @CurrentStepName
+    END
+
+    CLOSE job_cursor
+    DEALLOCATE job_cursor
+
+    INSERT INTO #Report (ReportLine)
+    SELECT N'## Notes'
+    UNION ALL SELECT N''
+    UNION ALL SELECT N'- Last run uses job outcome history (`sysjobhistory` step_id = 0).'
+    UNION ALL SELECT N'- Next run times come from `msdb.dbo.sysjobschedules`.'
+    UNION ALL SELECT N'- Command text may be truncated (`@MaxCommandLength`). Review full steps in SSMS or `msdb.dbo.sysjobsteps`.'
+    UNION ALL SELECT N'- Report generated by `dbo.ShowAgentJobReport` (Markdown).'
+    UNION ALL SELECT N''
 END
+ELSE
+BEGIN
+    /* ----- Fixed-width TEXT mode (original layout) ----- */
+    INSERT INTO #Report (ReportLine)
+    SELECT LEFT(@HeaderRule, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' SQL AGENT JOB REPORT' + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Server: ' + @ServerName
+                + '  ' + @ReportTime + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' SQL Server ' + @ProductVersion + ' ' + ISNULL(@ProductLevel, '')
+                + '  |  ' + LEFT(ISNULL(@Edition, ''), 28) + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(@HeaderRule, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' SUMMARY' + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(@Divider, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Jobs: ' + CAST(@TotalJobs AS varchar(10))
+                + ' total  |  ' + CAST(@EnabledJobs AS varchar(10)) + ' enabled'
+                + '  |  ' + CAST(@DisabledJobs AS varchar(10)) + ' disabled'
+                + '  |  ' + CAST(@RunningJobs AS varchar(10)) + ' running now'
+                + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Schedules: ' + CAST(@TotalSchedules AS varchar(10))
+                + ' linked  |  ' + CAST(@ScheduledJobs AS varchar(10)) + ' jobs with schedule'
+                + '  |  ' + CAST(@UnscheduledJobs AS varchar(10)) + ' without schedule'
+                + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Steps: ' + CAST(@TotalSteps AS varchar(10))
+                + '  |  last-run failed (outcome): ' + CAST(@FailedLastRun AS varchar(10))
+                + '  |  filter job: ' + LEFT(CAST(@JobNamePattern AS varchar(40)), 40)
+                + '  |  sort: ' + @SortByUpper
+                + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Options: schedules=' + CASE WHEN @IncludeSchedules = 1 THEN 'Y' ELSE 'N' END
+                + ' steps=' + CASE WHEN @IncludeSteps = 1 THEN 'Y' ELSE 'N' END
+                + ' command=' + CASE WHEN @IncludeCommandText = 1 THEN 'Y' ELSE 'N' END
+                + '  |  category filter: ' + LEFT(CAST(@CategoryPattern AS varchar(40)), 40)
+                + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(@Divider, @ReportWidth)
 
-CLOSE job_cursor
-DEALLOCATE job_cursor
+    IF @TotalJobs = 0
+    BEGIN
+        INSERT INTO #Report (ReportLine)
+        SELECT LEFT(' No SQL Agent jobs matched the current filters.' + @BlankLine, @ReportWidth)
+        UNION ALL
+        SELECT LEFT(@HeaderRule, @ReportWidth)
 
-INSERT INTO #Report (ReportLine)
-SELECT LEFT(@BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(@HeaderRule, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Legend: Last run uses job outcome history (step_id = 0). Next run from sysjobschedules.' + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(' Note: Command text is truncated. Review full steps in SSMS or msdb.dbo.sysjobsteps.' + @BlankLine, @ReportWidth)
-UNION ALL
-SELECT LEFT(@HeaderRule, @ReportWidth)
+        SELECT ReportLine
+          FROM #Report
+         ORDER BY [LineNo]
+
+        RETURN 0
+    END
+
+    DECLARE job_cursor_txt CURSOR LOCAL FAST_FORWARD FOR
+        SELECT
+            JobId, JobName, JobEnabled, CategoryName, OwnerName, Description,
+            DateCreated, DateModified, StartStepId, NotifyLevelEmail, DeleteLevel,
+            StepCount, ScheduleCount, LastRunOutcome, LastRunDateTime, LastRunDuration,
+            IsRunning, CurrentStepName
+          FROM #Jobs
+         ORDER BY SortOrder
+
+    OPEN job_cursor_txt
+    FETCH NEXT FROM job_cursor_txt INTO
+        @JobId, @JobName, @JobEnabled, @CategoryName, @OwnerName, @Description,
+        @DateCreated, @DateModified, @StartStepId, @NotifyLevelEmail, @DeleteLevel,
+        @StepCount, @ScheduleCount, @LastRunOutcome, @LastRunDateTime, @LastRunDuration,
+        @IsRunning, @CurrentStepName
+
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        INSERT INTO #Report (ReportLine)
+        SELECT LEFT(@BlankLine, @ReportWidth)
+        UNION ALL
+        SELECT LEFT(@HeaderRule, @ReportWidth)
+        UNION ALL
+        SELECT LEFT(
+                   ' JOB: ' + LEFT(CAST(@JobName AS varchar(80)), 70)
+                   + '  [' + CASE WHEN @JobEnabled = 1 THEN 'Enabled' ELSE 'DISABLED' END + ']'
+                   + CASE WHEN @IsRunning = 1 THEN '  ** RUNNING **' ELSE '' END
+                   + @BlankLine,
+                   @ReportWidth)
+        UNION ALL
+        SELECT LEFT(
+                   ' Category: ' + LEFT(ISNULL(CAST(@CategoryName AS varchar(40)), '(none)'), 28)
+                   + '  Owner: ' + LEFT(ISNULL(CAST(@OwnerName AS varchar(40)), '(unknown)'), 28)
+                   + '  Start step: ' + CAST(ISNULL(@StartStepId, 1) AS varchar(10))
+                   + @BlankLine,
+                   @ReportWidth)
+        UNION ALL
+        SELECT LEFT(
+                   ' Created: ' + ISNULL(CONVERT(varchar(19), @DateCreated, 120), 'n/a')
+                   + '  Modified: ' + ISNULL(CONVERT(varchar(19), @DateModified, 120), 'n/a')
+                   + '  Steps: ' + CAST(@StepCount AS varchar(10))
+                   + '  Schedules: ' + CAST(@ScheduleCount AS varchar(10))
+                   + @BlankLine,
+                   @ReportWidth)
+        UNION ALL
+        SELECT LEFT(
+                   ' Last run: ' + ISNULL(@LastRunOutcome, 'Never run')
+                   + CASE WHEN @LastRunDateTime IS NOT NULL THEN ' at ' + @LastRunDateTime ELSE '' END
+                   + CASE WHEN @LastRunDuration IS NOT NULL THEN '  duration ' + @LastRunDuration ELSE '' END
+                   + CASE WHEN @IsRunning = 1
+                          THEN '  current step: ' + LEFT(ISNULL(CAST(@CurrentStepName AS varchar(40)), '?'), 40)
+                          ELSE ''
+                     END
+                   + @BlankLine,
+                   @ReportWidth)
+
+        IF NULLIF(LTRIM(RTRIM(ISNULL(@Description, N''))), N'') IS NOT NULL
+           AND UPPER(LTRIM(RTRIM(@Description))) NOT IN (N'NO DESCRIPTION AVAILABLE.', N'NO DESCRIPTION AVAILABLE')
+        BEGIN
+            INSERT INTO #Report (ReportLine)
+            SELECT LEFT(' Description: ' + LEFT(REPLACE(REPLACE(REPLACE(
+                         CAST(@Description AS varchar(200)), CHAR(13), ' '), CHAR(10), ' '), CHAR(9), ' '), 100)
+                        + @BlankLine, @ReportWidth)
+        END
+
+        INSERT INTO #Report (ReportLine)
+        SELECT LEFT(@Divider, @ReportWidth)
+
+        IF @IncludeSchedules = 1
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM #Schedules WHERE JobId = @JobId)
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT LEFT(' SCHEDULES: (none attached)' + @BlankLine, @ReportWidth)
+            END
+            ELSE
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT LEFT(' SCHEDULES' + @BlankLine, @ReportWidth)
+
+                DECLARE sched_cursor_txt CURSOR LOCAL FAST_FORWARD FOR
+                    SELECT ScheduleName, ScheduleEnabled, Frequency, IntervalText, TimeText, ActiveWindow, NextRunText
+                      FROM #Schedules
+                     WHERE JobId = @JobId
+                     ORDER BY ScheduleName, ScheduleId
+
+                OPEN sched_cursor_txt
+                FETCH NEXT FROM sched_cursor_txt INTO
+                    @SchedName, @SchedEnabled, @SchedFrequency, @SchedInterval,
+                    @SchedTime, @SchedWindow, @SchedNext
+
+                WHILE @@FETCH_STATUS = 0
+                BEGIN
+                    INSERT INTO #Report (ReportLine)
+                    SELECT LEFT(
+                               '  * '
+                               + LEFT(ISNULL(CAST(@SchedName AS varchar(40)), '(unnamed)') + @BlankLine, 28)
+                               + ' [' + CASE WHEN @SchedEnabled = 1 THEN 'On' ELSE 'Off' END + '] '
+                               + LEFT(@SchedFrequency + @BlankLine, 18)
+                               + ' '
+                               + LEFT(@SchedInterval + @BlankLine, 28)
+                               + ' '
+                               + LEFT(@SchedTime + @BlankLine, 30),
+                               @ReportWidth)
+                    UNION ALL
+                    SELECT LEFT(
+                               '    window: ' + @SchedWindow
+                               + '  next run: ' + @SchedNext
+                               + @BlankLine,
+                               @ReportWidth)
+
+                    FETCH NEXT FROM sched_cursor_txt INTO
+                        @SchedName, @SchedEnabled, @SchedFrequency, @SchedInterval,
+                        @SchedTime, @SchedWindow, @SchedNext
+                END
+
+                CLOSE sched_cursor_txt
+                DEALLOCATE sched_cursor_txt
+            END
+
+            INSERT INTO #Report (ReportLine)
+            SELECT LEFT(@Divider, @ReportWidth)
+        END
+
+        IF @IncludeSteps = 1
+        BEGIN
+            IF NOT EXISTS (SELECT 1 FROM #Steps WHERE JobId = @JobId)
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT LEFT(' STEPS: (none defined)' + @BlankLine, @ReportWidth)
+            END
+            ELSE
+            BEGIN
+                INSERT INTO #Report (ReportLine)
+                SELECT LEFT(' STEPS' + @BlankLine, @ReportWidth)
+
+                DECLARE step_cursor_txt CURSOR LOCAL FAST_FORWARD FOR
+                    SELECT
+                        StepId, StepName, Subsystem, DatabaseName, DatabaseUserName,
+                        OnSuccessAction, OnFailAction, RetryAttempts, RetryInterval, ProxyName, CommandText
+                      FROM #Steps
+                     WHERE JobId = @JobId
+                     ORDER BY StepId
+
+                OPEN step_cursor_txt
+                FETCH NEXT FROM step_cursor_txt INTO
+                    @StepId, @StepName, @Subsystem, @StepDatabase, @StepDbUser,
+                    @OnSuccess, @OnFail, @RetryAttempts, @RetryInterval, @ProxyName, @CommandText
+
+                WHILE @@FETCH_STATUS = 0
+                BEGIN
+                    INSERT INTO #Report (ReportLine)
+                    SELECT LEFT(
+                               '  '
+                               + RIGHT('  ' + CAST(@StepId AS varchar(4)), 2)
+                               + '. '
+                               + LEFT(CAST(@StepName AS varchar(40)) + @BlankLine, 34)
+                               + ' ['
+                               + LEFT(CAST(@Subsystem AS varchar(16)) + @BlankLine, 12)
+                               + '] DB='
+                               + LEFT(ISNULL(CAST(@StepDatabase AS varchar(30)), '-') + @BlankLine, 20)
+                               + ' ok->'
+                               + LEFT(@OnSuccess + @BlankLine, 14)
+                               + ' fail->'
+                               + LEFT(@OnFail + @BlankLine, 12),
+                               @ReportWidth)
+
+                    IF @RetryAttempts > 0
+                       OR @ProxyName IS NOT NULL
+                       OR NULLIF(@StepDbUser, N'') IS NOT NULL
+                    BEGIN
+                        INSERT INTO #Report (ReportLine)
+                        SELECT LEFT(
+                                   '     retry=' + CAST(@RetryAttempts AS varchar(6))
+                                   + 'x/' + CAST(@RetryInterval AS varchar(6)) + 'min'
+                                   + CASE WHEN @ProxyName IS NOT NULL
+                                          THEN '  proxy=' + LEFT(CAST(@ProxyName AS varchar(40)), 30)
+                                          ELSE ''
+                                     END
+                                   + CASE WHEN NULLIF(@StepDbUser, N'') IS NOT NULL
+                                          THEN '  runas=' + LEFT(CAST(@StepDbUser AS varchar(40)), 30)
+                                          ELSE ''
+                                     END
+                                   + @BlankLine,
+                                   @ReportWidth)
+                    END
+
+                    IF @IncludeCommandText = 1
+                       AND NULLIF(LTRIM(RTRIM(ISNULL(@CommandText, N''))), N'') IS NOT NULL
+                    BEGIN
+                        INSERT INTO #Report (ReportLine)
+                        SELECT LEFT(
+                                   '     cmd: '
+                                   + LEFT(ISNULL(CAST(@CommandText AS varchar(200)), '(empty)') + @BlankLine, @MaxCommandLength)
+                                   + CASE
+                                         WHEN LEN(ISNULL(@CommandText, N'')) >= @MaxCommandLength THEN '...'
+                                         ELSE ''
+                                     END
+                                   + @BlankLine,
+                                   @ReportWidth)
+                    END
+
+                    FETCH NEXT FROM step_cursor_txt INTO
+                        @StepId, @StepName, @Subsystem, @StepDatabase, @StepDbUser,
+                        @OnSuccess, @OnFail, @RetryAttempts, @RetryInterval, @ProxyName, @CommandText
+                END
+
+                CLOSE step_cursor_txt
+                DEALLOCATE step_cursor_txt
+            END
+        END
+
+        FETCH NEXT FROM job_cursor_txt INTO
+            @JobId, @JobName, @JobEnabled, @CategoryName, @OwnerName, @Description,
+            @DateCreated, @DateModified, @StartStepId, @NotifyLevelEmail, @DeleteLevel,
+            @StepCount, @ScheduleCount, @LastRunOutcome, @LastRunDateTime, @LastRunDuration,
+            @IsRunning, @CurrentStepName
+    END
+
+    CLOSE job_cursor_txt
+    DEALLOCATE job_cursor_txt
+
+    INSERT INTO #Report (ReportLine)
+    SELECT LEFT(@BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(@HeaderRule, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Legend: Last run uses job outcome history (step_id = 0). Next run from sysjobschedules.' + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(' Note: Command text is truncated. Review full steps in SSMS or msdb.dbo.sysjobsteps.' + @BlankLine, @ReportWidth)
+    UNION ALL
+    SELECT LEFT(@HeaderRule, @ReportWidth)
+END
 
 SELECT ReportLine
   FROM #Report
@@ -941,15 +1255,20 @@ GO
 /*
   Usage examples (note the equals sign after each parameter name):
 
+    -- Markdown (default) — copy ReportLine column into the wiki
     EXEC dbo.ShowAgentJobReport;
 
     EXEC dbo.ShowAgentJobReport
          @JobFilter   = N'%Backup%',
          @EnabledOnly = 1;
 
+    -- Fixed-width text for SSMS Results to Text
+    EXEC dbo.ShowAgentJobReport @OutputFormat = 'TEXT';
+
     EXEC dbo.ShowAgentJobReport
          @JobFilter          = N'%',
          @CategoryFilter     = N'%Database%',
          @IncludeCommandText = 0,
-         @SortBy             = 'CATEGORY';
+         @SortBy             = 'CATEGORY',
+         @OutputFormat       = 'MARKDOWN';
 */

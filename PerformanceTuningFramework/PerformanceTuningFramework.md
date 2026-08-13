@@ -456,13 +456,13 @@ Parameters:
 
 File: `ShowAgentJobReport.sql`
 
-Fixed-width, screen-friendly inventory of SQL Agent jobs on the instance: job metadata, attached schedules, and step definitions.
+Inventory of SQL Agent jobs on the instance: job metadata, attached schedules, and step definitions. **Default output is Markdown** (wiki-ready). Use `@OutputFormat = 'TEXT'` for the classic fixed-width layout.
 
 - Reads `msdb` catalog views (`sysjobs`, `sysjobsteps`, `sysschedules`, `sysjobschedules`, recent `sysjobhistory`, current `sysjobactivity`)
 - Summary counts: enabled/disabled, scheduled/unscheduled, running now, last-run failures
-- Per job: category, owner, created/modified, last run outcome/time/duration, running indicator
+- Job inventory table plus per-job sections (Markdown headings/tables, or fixed-width TEXT)
 - Per schedule: frequency, day interval, time window, next run, enabled flag
-- Per step: subsystem, database, success/fail flow, retry/proxy/run-as, optional truncated command text
+- Per step: subsystem, database, success/fail flow, retry/proxy/run-as, optional command text (fenced `sql` blocks in Markdown)
 - Does not persist results to a table
 
 Deployment:
@@ -471,7 +471,7 @@ Deployment:
 -- Run ShowAgentJobReport.sql in the tool database
 EXEC dbo.ShowAgentJobReport
 EXEC dbo.ShowAgentJobReport @JobFilter = N'%Backup%', @EnabledOnly = 1
-EXEC dbo.ShowAgentJobReport @IncludeCommandText = 0, @SortBy = 'CATEGORY'
+EXEC dbo.ShowAgentJobReport @OutputFormat = 'TEXT', @IncludeCommandText = 0, @SortBy = 'CATEGORY'
 ```
 
 Parameters:
@@ -484,9 +484,10 @@ Parameters:
 - `@IncludeCommandText` — include truncated step command text (default `1`)
 - `@MaxCommandLength` — max command characters shown per step (default `160`)
 - `@SortBy` — `NAME`, `CATEGORY`, `OWNER`, or `ENABLED` (default `NAME`)
-- `@ReportWidth` — kept for compatibility; layout is fixed at 120 characters
+- `@OutputFormat` — `MARKDOWN` (default, wiki-friendly) or `TEXT` (fixed-width)
+- `@ReportWidth` — TEXT mode only; layout is fixed at 120 characters
 
-Note: Requires permission to read SQL Agent job metadata in `msdb` (for example `SQLAgentReaderRole` or higher). Complements `ShowJobHistory` / `ShowRunningJobs` in `Procedures/` which cover execution history and currently running jobs.
+Note: Requires permission to read SQL Agent job metadata in `msdb` (for example `SQLAgentReaderRole` or higher). For Markdown, copy the `ReportLine` result column (Results to Text / grid) into the wiki. Complements `ShowJobHistory` / `ShowRunningJobs` in `Procedures/` which cover execution history and currently running jobs.
 
 ### ShowTraceWritablePaths
 
