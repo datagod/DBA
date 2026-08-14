@@ -159,6 +159,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `CheckForHeaps` | `CheckForHeaps.sql` | Fast catalog-only heap scan |
 | `ShowHeaps` | `ShowHeaps.sql` | Full heap DMV analysis with clustered-index DDL |
 | `RecommendClusteredIndex` | `RecommendClusteredIndex.sql` | Single-table clustered index recommendation (identity-first) |
+| `ShowTableInfo` | `ShowTableInfo.sql` | Single-table size, indexes, fragmentation, columns, constraints, stats |
 | `ExamineQueryStore` | `ExamineQueryStore.sql` | Deep Query Store analysis with prioritized findings |
 | `ShowQueryStoreReport` | `ShowQueryStoreReport.sql` | Query Store report for one database |
 | `ShowQueryStoreWorkloadReport` | `ShowQueryStoreWorkloadReport.sql` | Instance-wide Query Store workload scan |
@@ -179,6 +180,12 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 ```sql
 EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase';
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase', @SortBy = 'READS';
+```
+
+**Single-table exam**
+
+```sql
+EXEC dbo.ShowTableInfo @TargetDatabase = N'YourDatabase', @TableName = N'YourTable';
 ```
 
 **Heap remediation**

@@ -195,6 +195,36 @@ Recommendation priority:
 
 Note: usage statistics reset when the SQL Server instance restarts. When the host instance is newer than the target compatibility level (for example SQL Server 2022 with compatibility level 100), heap detection and recommendations honor the target database mode. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
 
+
+### ShowTableInfo
+
+File: `ShowTableInfo.sql`
+
+Stored procedure that examines one user table in a target database and returns detailed catalog and DMV information. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database.
+
+- Reports table identity (create/modify dates, lock escalation, filegroups, temporal and memory-optimized flags when the instance supports them)
+- Reports row count, reserved/used/data/index/unused space, pages, and partition count
+- Identifies HEAP vs CLUSTERED vs CLUSTERED COLUMNSTORE and clustered key columns
+- Lists every index with keys, includes, filter, fill factor, compression, size, usage, and LIMITED-mode fragmentation
+- Lists columns, constraints, statistics, triggers, and missing-index suggestions for that table only
+- Does not persist results to a table
+
+Deployment:
+
+```sql
+-- Run ShowTableInfo.sql in the tool database
+EXEC dbo.ShowTableInfo @TargetDatabase = N'YourDatabase', @TableName = N'YourTable'
+EXEC dbo.ShowTableInfo @TargetDatabase = N'YourDatabase', @TableName = N'Sales.Orders'
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to examine (default: current database)
+- `@TableName` — table name, or `schema.table`
+- `@SchemaName` — schema when `@TableName` has no qualifier (default `dbo`)
+
+Note: fragmentation is collected with `sys.dm_db_index_physical_stats` in LIMITED mode for the specified table only.
+
 ### AnalyzeIndexes
 
 File: `AnalyzeIndexes.sql`
