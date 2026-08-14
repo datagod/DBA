@@ -8,9 +8,10 @@
 
   Deploy to the tool database, then execute:
     EXEC dbo.RecommendClusteredIndex
-         @TargetDatabase = N'YourDatabase',
-         @SchemaName     = N'dbo',
-         @TableName      = N'YourTable'
+         @TargetDatabase     = N'YourDatabase',
+         @SchemaName         = N'dbo',
+         @TableName          = N'YourTable',
+         @SuggestNewColumns  = N'no'
 */
 
 SET ANSI_NULLS ON
@@ -30,18 +31,21 @@ GO
 
 CREATE PROCEDURE dbo.RecommendClusteredIndex
 (
-    @TargetDatabase   sysname,
-    @SchemaName       sysname = N'dbo',
-    @TableName        sysname,
-    @PreferIdentity   bit     = 1,
-    @ReturnResultSets bit     = 1
+    @TargetDatabase     sysname,
+    @SchemaName         sysname    = N'dbo',
+    @TableName          sysname,
+    @PreferIdentity     bit        = 1,
+    @SuggestNewColumns  varchar(10) = 'no',
+    @ReturnResultSets   bit        = 1
 )
 AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: June 25, 2026
 -- Author:       Bill McEvoy
 -- Description:  Examines one user table and related DMVs to recommend a clustered index. Prioritizes
---               a single ascending identity column when available or when one can be added safely.
+--               a single ascending identity column when one already exists. When @SuggestNewColumns
+--               is yes, may also recommend adding a new identity column. Default is no: use only
+--               columns that already exist on the table.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -59,12 +63,19 @@ DECLARE
     @ServerName          sysname,
     @CaptureDate         datetime,
     @ProposedIdentityCol sysname,
-    @ObjectId            int
+    @ObjectId            int,
+    @SuggestNewColumnsOn bit
 
 IF @TargetDatabase IS NULL OR @TableName IS NULL
 BEGIN
     RAISERROR('@TargetDatabase and @TableName are required.', 16, 1)
     RETURN
+END
+
+SET @SuggestNewColumnsOn = CASE
+    WHEN UPPER(LTRIM(RTRIM(ISNULL(@SuggestNewColumns, 'no')))) IN ('YES', 'Y', '1', 'TRUE', 'ON')
+        THEN 1
+    ELSE 0
 END
 
 SET @TargetDatabaseId = DB_ID(@TargetDatabase)
@@ -616,6 +627,7 @@ UPDATE r
                 AND r.IdentityIsPreferredType = 1
                THEN 'IDENTITY'
            WHEN @PreferIdentity = 1
+                AND @SuggestNewColumnsOn = 1
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN 'ADD_IDENTITY'
@@ -643,6 +655,7 @@ UPDATE r
                 AND r.IdentityIsPreferredType = 1
                THEN QUOTENAME(r.IdentityColumn) + ' ASC'
            WHEN @PreferIdentity = 1
+                AND @SuggestNewColumnsOn = 1
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN QUOTENAME(@ProposedIdentityCol) + ' ASC'
@@ -661,7 +674,7 @@ UPDATE r
            + CASE WHEN ISNULL(r.NonClusteredIndexCount, 0) >= 3 THEN 10 WHEN ISNULL(r.NonClusteredIndexCount, 0) >= 1 THEN 5 ELSE 0 END
            + CASE WHEN ISNULL(r.MissingIndexImpact, 0) >= 1000000 THEN 20 WHEN ISNULL(r.MissingIndexImpact, 0) >= 100000 THEN 12 WHEN ISNULL(r.MissingIndexImpact, 0) >= 10000 THEN 6 ELSE 0 END
            + CASE WHEN @PreferIdentity = 1 AND r.IdentityColumn IS NOT NULL AND r.IdentityIsAscending = 1 THEN 25 ELSE 0 END
-           + CASE WHEN @PreferIdentity = 1 AND r.IdentityColumn IS NULL AND r.PrimaryKeyColumns IS NULL THEN 15 ELSE 0 END
+           + CASE WHEN @PreferIdentity = 1 AND @SuggestNewColumnsOn = 1 AND r.IdentityColumn IS NULL AND r.PrimaryKeyColumns IS NULL THEN 15 ELSE 0 END
            + CASE WHEN r.PrimaryKeyColumns IS NOT NULL THEN 10 ELSE 0 END
            + CASE WHEN ISNULL(r.AvgFragmentationPct, 0) >= 30 THEN 5 ELSE 0 END
   FROM #ClusteredRecommendation AS r
@@ -766,8 +779,9 @@ BEGIN
         TargetCompatibilityLevel = @CompatibilityLevel,
         IndexWithOptions = @IndexWithOptions,
         PreferIdentity = @PreferIdentity,
-        ProposedIdentityColumn = @ProposedIdentityCol,
-        Note = 'Prioritizes a single ascending integer identity clustering key when possible. Usage stats are since instance restart. Test DDL in a maintenance window.'
+        SuggestNewColumns = @SuggestNewColumns,
+        ProposedIdentityColumn = CASE WHEN @SuggestNewColumnsOn = 1 THEN @ProposedIdentityCol ELSE NULL END,
+        Note = 'Uses existing table columns by default. Set @SuggestNewColumns = ''yes'' to allow recommending a new identity column. Usage stats are since instance restart. Test DDL in a maintenance window.'
 
     SELECT
         SchemaName,
