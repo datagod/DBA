@@ -1,253 +1,414 @@
-use dba
-go
-IF (object_id('Now') IS NOT NULL)
-BEGIN
-  print 'Dropping procedure: Now'
-  drop procedure Now
-END
-print 'Creating procedure: Now'
+/*
+  Now.sql
+  Current-activity report for SQL Server 2012 (11.x) and later.
+
+  Deploy to the tool database, then execute:
+    EXEC dbo.Now
+*/
+
+SET ANSI_NULLS ON
 GO
-CREATE PROCEDURE Now
-as
+SET QUOTED_IDENTIFIER ON
+GO
+
+IF OBJECT_ID('dbo.Now') IS NOT NULL
+BEGIN
+    PRINT 'Dropping procedure: Now'
+    DROP PROCEDURE dbo.Now
+END
+GO
+
+PRINT 'Creating procedure: Now (2026-08-16)'
+GO
+
+CREATE PROCEDURE dbo.Now
+AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: February 11, 2007
 -- Author:       Bill McEvoy
--- Description:  This procedure produces a report that details the current activity on the
---               SQL Server.  Each process that is actively performing I/O will be listed along 
---               with the SQL code that is being executed.
+-- Description:  Current-activity report. Lists active sessions, blockers, the SQL they are
+--               running, and pending file I/O.
 ---------------------------------------------------------------------------------------------------
--- Version:      1.1  
+-- Version:      1.1
 -- Date Revised: April 22, 2014
 -- Author:       Bill McEvoy
--- Reason:       We now wrap the database name with square brackets to accomodate names with
---               non alphanumeric characters.
+-- Reason:       Wrap database names in square brackets.
 ---------------------------------------------------------------------------------------------------
--- Version:      
--- Date Revised: 
--- Author:       
--- Reason:       
---               
+-- Version:      1.2
+-- Date Revised: August 16, 2026
+-- Author:       Bill McEvoy
+-- Reason:       Replace sysprocesses, ::fn_get_sql, and the 20-byte sql_handle with DMVs that
+--               exist on SQL Server 2012 and later. Keep the original PRINT / SELECT layout.
 ---------------------------------------------------------------------------------------------------
-set nocount on
+SET NOCOUNT ON
 
-declare @sql_handle binary(20),
-        @spid       int,
-        @blocker    int,
-        @rowcount   int,
-        @output     varchar(8000),
-        @blocks     int,
-        @spids      int,
-        @SQL        varchar(8000),
-        @version    varchar(10)
+DECLARE
+    @MajorVersion     tinyint,
+    @Version          varchar(10),
+    @ActiveSessions   int,
+    @BlockedSessions  int,
+    @TotalSessions    int,
+    @session_id       int,
+    @is_blocker       bit,
+    @sql_handle       varbinary(64),
+    @input_buffer     nvarchar(max),
+    @sql_text         nvarchar(max),
+    @HadSessions      bit,
+    @InputBufferSql   nvarchar(200)
 
-select  @version    = '1.1'        
+SET @MajorVersion = CONVERT(tinyint,
+    LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
+         NULLIF(CHARINDEX('.', CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))), 0) - 1))
 
-IF (object_id('tempdb..#DBCCResults') IS NOT NULL)
-  drop table #DBCCResults
+IF @MajorVersion < 11
+BEGIN
+    RAISERROR('Now requires SQL Server 2012 (11.x) or later. This instance is version %d.', 16, 1, @MajorVersion)
+    RETURN
+END
+
+SET @Version = '1.2'
+
+IF OBJECT_ID('tempdb..#Sessions') IS NOT NULL
+    DROP TABLE #Sessions
+
+CREATE TABLE #Sessions
+(
+    SortOrder        int            NOT NULL,
+    session_id       int            NOT NULL,
+    request_id       int            NOT NULL,
+    blocking_id      int            NOT NULL,
+    is_blocker       bit            NOT NULL,
+    login_name       nvarchar(128)  NULL,
+    host_name        nvarchar(128)  NULL,
+    database_name    sysname        NULL,
+    status           nvarchar(30)   NULL,
+    command          nvarchar(32)   NULL,
+    wait_type        nvarchar(60)   NULL,
+    cpu_time         int            NOT NULL,
+    phys_io          bigint         NOT NULL,
+    memory_mb        decimal(12, 2) NOT NULL,
+    program_name     nvarchar(128)  NULL,
+    login_time       datetime       NULL,
+    last_request     datetime       NULL,
+    sql_handle       varbinary(64)  NULL
+)
+
+IF OBJECT_ID('tempdb..#DBCCResults') IS NOT NULL
+    DROP TABLE #DBCCResults
 
 CREATE TABLE #DBCCResults
 (
-  EventType  varchar(200)   NULL,
-  Parameters varchar(200)   NULL,
-  EventInfo  varchar(7000) NULL 
+    EventType  nvarchar(30)   NULL,
+    Parameters int            NULL,
+    EventInfo  nvarchar(max)  NULL
 )
 
+IF OBJECT_ID('tempdb..#PendingIO') IS NOT NULL
+    DROP TABLE #PendingIO
 
-declare ActiveSpids_Cursor CURSOR FOR 
- select spid,
-        blocked,
-        sql_handle
-   from master.dbo.sysprocesses a
-  where (sql_handle <> 0x0000000000000000000000000000000000000000 
-    and status <> 'sleeping'
-    and spid <> @@SPID)
-     or (blocked > 0)
-     or exists (select 1 from master.dbo.sysprocesses b where a.spid = b.blocked)  -- this includes the blocker process information
+CREATE TABLE #PendingIO
+(
+    DatabaseID   int            NOT NULL,
+    FileName     sysname        NOT NULL,
+    DBFileName   nvarchar(260)  NOT NULL,
+    FileID       int            NOT NULL,
+    IO_Pending   bit            NOT NULL
+)
 
-  order by cpu desc
-    
+;WITH ActiveSessionIds AS
+(
+    SELECT DISTINCT SessionId = x.session_id
+    FROM (
+        SELECT r.session_id
+          FROM sys.dm_exec_requests AS r
+         WHERE r.session_id > 50
+           AND r.session_id <> @@SPID
+           AND r.status NOT IN (N'sleeping', N'background')
+
+        UNION
+
+        SELECT r.session_id
+          FROM sys.dm_exec_requests AS r
+         WHERE r.blocking_session_id > 0
+
+        UNION
+
+        SELECT r.blocking_session_id
+          FROM sys.dm_exec_requests AS r
+         WHERE r.blocking_session_id > 0
+    ) AS x
+    WHERE x.session_id IS NOT NULL
+)
+INSERT INTO #Sessions
+(
+    SortOrder,
+    session_id,
+    request_id,
+    blocking_id,
+    is_blocker,
+    login_name,
+    host_name,
+    database_name,
+    status,
+    command,
+    wait_type,
+    cpu_time,
+    phys_io,
+    memory_mb,
+    program_name,
+    login_time,
+    last_request,
+    sql_handle
+)
+SELECT
+    SortOrder = ROW_NUMBER() OVER (ORDER BY ISNULL(r.cpu_time, 0) DESC, a.SessionId),
+    s.session_id,
+    ISNULL(r.request_id, 0),
+    ISNULL(r.blocking_session_id, 0),
+    CASE
+        WHEN EXISTS (
+            SELECT 1
+              FROM sys.dm_exec_requests AS b
+             WHERE b.blocking_session_id = s.session_id
+        ) THEN 1
+        ELSE 0
+    END,
+    s.login_name,
+    s.host_name,
+    DB_NAME(COALESCE(r.database_id, s.database_id)),
+    COALESCE(r.status, s.status),
+    r.command,
+    COALESCE(r.wait_type, r.last_wait_type),
+    ISNULL(r.cpu_time, 0),
+    ISNULL(conn.phys_io, 0),
+    CAST(s.memory_usage * 8192.0 / 1024.0 / 1024.0 AS decimal(12, 2)),
+    s.program_name,
+    s.login_time,
+    s.last_request_end_time,
+    COALESCE(r.sql_handle, conn.most_recent_sql_handle)
+FROM ActiveSessionIds AS a
+INNER JOIN sys.dm_exec_sessions AS s
+    ON s.session_id = a.SessionId
+OUTER APPLY (
+    SELECT TOP (1) r.*
+      FROM sys.dm_exec_requests AS r
+     WHERE r.session_id = s.session_id
+     ORDER BY r.cpu_time DESC, r.request_id DESC
+) AS r
+OUTER APPLY (
+    SELECT TOP (1)
+        phys_io = (
+            SELECT SUM(c2.num_reads + c2.num_writes)
+              FROM sys.dm_exec_connections AS c2
+             WHERE c2.session_id = s.session_id
+        ),
+        c.most_recent_sql_handle
+      FROM sys.dm_exec_connections AS c
+     WHERE c.session_id = s.session_id
+     ORDER BY c.connect_time DESC
+) AS conn
+
+INSERT INTO #PendingIO
+(
+    DatabaseID,
+    FileName,
+    DBFileName,
+    FileID,
+    IO_Pending
+)
+SELECT
+    mf.database_id,
+    mf.name,
+    mf.physical_name,
+    mf.file_id,
+    ior.io_pending
+FROM sys.dm_io_pending_io_requests AS ior
+INNER JOIN sys.dm_io_virtual_file_stats(NULL, NULL) AS vfs
+    ON vfs.file_handle = ior.io_handle
+INNER JOIN sys.master_files AS mf
+    ON mf.database_id = vfs.database_id
+   AND mf.file_id = vfs.file_id
+
+SELECT @ActiveSessions  = COUNT(*) FROM #Sessions
+SELECT @BlockedSessions = COUNT(*) FROM #Sessions WHERE blocking_id > 0
+SELECT @TotalSessions   = COUNT(*) FROM sys.dm_exec_sessions
+
+PRINT '===================='
+PRINT '= CURRENT ACTIVITY ='
+PRINT '===================='
+PRINT CONVERT(char(19), GETDATE(), 120)
+PRINT 'Version ' + @Version
+PRINT ' '
+PRINT 'Active  SPIDs: ' + CONVERT(varchar(8), @ActiveSessions)
+PRINT 'Blocked SPIDs: ' + CONVERT(varchar(8), @BlockedSessions)
+PRINT 'Total   SPIDs: ' + CONVERT(varchar(8), @TotalSessions)
+
+IF @BlockedSessions > 0
+BEGIN
+    PRINT ' '
+    PRINT ' '
+    PRINT 'Blocked Process Summary'
+    PRINT '-----------------------'
+    PRINT ' '
+    SELECT
+        [loginame]     = LEFT(login_name, 20),
+        [hostname]     = LEFT(host_name, 20),
+        [database]     = LEFT(database_name, 25),
+        [spid]         = STR(session_id, 4, 0),
+        [block]        = STR(blocking_id, 5, 0),
+        [phys_io]      = STR(phys_io, 8, 0),
+        [cpu(mm:ss)]   = STR((cpu_time / 1000 / 60), 6) + ':'
+                       + CASE
+                             WHEN LEFT(STR(((cpu_time / 1000) % 60), 2), 1) = ' '
+                                 THEN STUFF(STR(((cpu_time / 1000) % 60), 2), 1, 1, '0')
+                             ELSE STR(((cpu_time / 1000) % 60), 2)
+                         END,
+        [mem(MB)]      = STR(memory_mb, 8, 2),
+        [program_name] = LEFT(program_name, 50),
+        [command]      = command,
+        [lastwaittype] = LEFT(wait_type, 25),
+        [login_time]   = CONVERT(char(19), login_time, 120),
+        [last_batch]   = CONVERT(char(19), last_request, 120),
+        [status]       = LEFT(status, 20)
+      FROM #Sessions
+     WHERE blocking_id > 0
+END
+
+DECLARE ActiveSpids_Cursor CURSOR LOCAL FAST_FORWARD FOR
+SELECT
+    session_id,
+    is_blocker,
+    sql_handle
+FROM #Sessions
+ORDER BY SortOrder
 
 OPEN ActiveSpids_Cursor
+FETCH NEXT FROM ActiveSpids_Cursor
+ INTO @session_id, @is_blocker, @sql_handle
 
-FETCH NEXT 
- FROM ActiveSpids_Cursor
- INTO @spid,
-      @blocker,
-      @sql_handle
+SET @HadSessions = 0
 
-set @rowcount = @@CURSOR_ROWS
-
-print '===================='
-print '= CURRENT ACTIVITY ='
-print '===================='
-print convert(char(19),getdate(),120)
-print 'Version ' + @version
-print ' '
-print 'Active  SPIDs: ' +  convert(varchar(8),@rowcount)
-
--- Blocking processes summary
-select @blocks = count(*) from master..sysprocesses where blocked > 0
-print 'Blocked SPIDs: ' + convert(varchar(8),@blocks)
-
-select @spids  = count(*) from master..sysprocesses
-print 'Total   SPIDs: ' + convert(varchar(8),@spids)
-
-
-
-IF (@blocks > 0)
+WHILE @@FETCH_STATUS = 0
 BEGIN
-  print ' '
-  print ' '
-  print 'Blocked Process Summary'
-  print '-----------------------'
-  print ' '
-  select 'loginame'     = left(loginame, 20),
-         'hostname'     = left(hostname,20),
-         'database'     = left(db_name(dbid),25),
-         'spid'         = str(spid,4,0),
-         'block'        = str(blocked,5,0),
-         'phys_io'      = str(physical_io,8,0),
-         'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
-         'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = left(program_name,50),
-         'command'      = cmd,
-         'lastwaittype' = left(lastwaittype,25),
-         'login_time'   = convert(char(19),login_time,120),
-         'last_batch'   = convert(char(19),last_batch,120),
-         'status'       = left(nt_username,20)
-    from master.dbo.sysprocesses
-   where blocked > 0
+    SET @HadSessions = 1
+
+    PRINT ' '
+    PRINT ' '
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT ' '
+    PRINT ' '
+    PRINT ' '
+
+    IF @is_blocker = 1
+    BEGIN
+        PRINT '================'
+        PRINT '=== BLOCKER ===='
+        PRINT '================'
+        PRINT ' '
+    END
+
+    SELECT
+        [loginame]     = LEFT(login_name, 30),
+        [hostname]     = LEFT(host_name, 30),
+        [database]     = LEFT(database_name, 30),
+        [spid]         = STR(session_id, 4, 0),
+        [block]        = STR(blocking_id, 5, 0),
+        [phys_io]      = STR(phys_io, 8, 0),
+        [cpu(mm:ss)]   = STR((cpu_time / 1000 / 60), 6) + ':'
+                       + CASE
+                             WHEN LEFT(STR(((cpu_time / 1000) % 60), 2), 1) = ' '
+                                 THEN STUFF(STR(((cpu_time / 1000) % 60), 2), 1, 1, '0')
+                             ELSE STR(((cpu_time / 1000) % 60), 2)
+                         END,
+        [mem(MB)]      = STR(memory_mb, 8, 2),
+        [program_name] = LEFT(program_name, 50),
+        [command]      = command,
+        [lastwaittype] = LEFT(wait_type, 25),
+        [login_time]   = CONVERT(char(19), login_time, 120),
+        [last_batch]   = CONVERT(char(19), last_request, 120),
+        [status]       = LEFT(status, 20)
+      FROM #Sessions
+     WHERE session_id = @session_id
+
+    PRINT '----------------------'
+    PRINT '-- DBCC INPUTBUFFER --'
+    PRINT '----------------------'
+    PRINT ' '
+
+    TRUNCATE TABLE #DBCCResults
+    SET @InputBufferSql = N'DBCC INPUTBUFFER(' + CONVERT(nvarchar(12), @session_id) + N') WITH NO_INFOMSGS'
+    BEGIN TRY
+        INSERT INTO #DBCCResults (EventType, Parameters, EventInfo)
+        EXEC (@InputBufferSql)
+        SELECT @input_buffer = EventInfo FROM #DBCCResults
+    END TRY
+    BEGIN CATCH
+        SET @input_buffer = NULL
+    END CATCH
+
+    IF @input_buffer IS NOT NULL AND LTRIM(RTRIM(@input_buffer)) <> N''
+        PRINT @input_buffer
+    ELSE
+        PRINT '(no input buffer available)'
+
+    PRINT ' '
+    PRINT ' '
+
+    SET @sql_text = NULL
+    IF @sql_handle IS NOT NULL AND @sql_handle <> 0x
+    BEGIN
+        SELECT @sql_text = st.[text]
+          FROM sys.dm_exec_sql_text(@sql_handle) AS st
+    END
+
+    IF @sql_text IS NOT NULL AND LTRIM(RTRIM(@sql_text)) <> N''
+    BEGIN
+        PRINT '------------------'
+        PRINT '-- dm_exec_sql_text --'
+        PRINT '------------------'
+        PRINT ' '
+        PRINT @sql_text
+    END
+
+    FETCH NEXT FROM ActiveSpids_Cursor
+     INTO @session_id, @is_blocker, @sql_handle
 END
 
-
-
-WHILE (@@FETCH_STATUS = 0 )
+IF @HadSessions = 1
 BEGIN
-  print ' '
-  print ' '
-  print 'O' + replicate('x',120) + 'O'  
-  print 'O' + replicate('x',120) + 'O'  
-  print ' '
-  print ' '
-  print ' '
-
-  IF (exists (select 1 from master..sysprocesses where blocked = @spid))
-  BEGIN
-
-    print '================'
-    print '=== BLOCKER ===='
-    print '================'
-    print ' '
-  END
-
-
-  select 'loginame'     = left(loginame, 30),
-         'hostname'     = left(hostname,30),
-         'database'     = left(db_name(dbid),30),
-         'spid'         = str(spid,4,0),
-         'block'        = str(blocked,5,0),
-         'phys_io'      = str(physical_io,8,0),
-         'cpu(mm:ss)'   = str((cpu/1000/60),6) + ':' + case when left((str(((cpu/1000) % 60),2)),1) = ' ' then stuff(str(((cpu/1000) % 60),2),1,1,'0') else str(((cpu/1000) % 60),2) END,
-         'mem(MB)'      = str((convert(float,memusage) * 8192.0 / 1024.0 / 1024.0),8,2),
-         'program_name' = left(program_name,50),
-         'command'      = cmd,
-         'lastwaittype' = left(lastwaittype,25),
-         'login_time'   = convert(char(19),login_time,120),
-         'last_batch'   = convert(char(19),last_batch,120),
-         'status'       = left(nt_username,20)
-    from master..sysprocesses
-   where spid = @spid
-
-  -- Dump the inputbuffer to get an idea of what the spid is doing
-  print '----------------------'
-  print '-- DBCC INPUTBUFFER --'
-  print '----------------------'
-  print ' '
-  truncate table #DBCCResults
-  select @SQL = 'DBCC INPUTBUFFER(' + convert(varchar(12),@spid) + ') WITH NO_INFOMSGS'
-
-  insert into #DBCCResults(EventType, Parameters, EventInfo)
-  exec (@SQL)
-
-  select @output = EventInfo
-    from #DBCCResults
-
-  print  @output
-  print ' '
-  print ' '
-
-  -- Use the built-in function to show the exact SQL code that the spid is running
-  select @output = ''
-  select @output = [text] from ::fn_get_sql(@sql_handle)
-  IF (@output <> '' and @output is not null)
-  BEGIN
-    print '------------------'
-    print '-- fn_get_sql() --'
-    print '------------------'
-    print ' '
-    print @output
-  END
-
-  FETCH NEXT 
-   FROM ActiveSpids_Cursor
-   INTO @spid,
-        @blocker,
-        @sql_handle
-                           
+    PRINT ' '
+    PRINT ' '
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT 'O' + REPLICATE('x', 120) + 'O'
+    PRINT ' '
+    PRINT ' '
+    PRINT ' '
 END
 
-IF (@spid is not null)
-BEGIN
-  print ' '
-  print ' '
-  print 'O' + replicate('x',120) + 'O'  
-  print 'O' + replicate('x',120) + 'O'  
-  print ' '
-  print ' '
-  print ' '
-END
-
-
-CLOSE      ActiveSpids_Cursor
+CLOSE ActiveSpids_Cursor
 DEALLOCATE ActiveSpids_Cursor
 
+PRINT '----------------------'
+PRINT '-- Pending File I/O --'
+PRINT '----------------------'
+PRINT ' '
 
+SELECT
+    [Database]   = LEFT(DB_NAME(DatabaseID), 25),
+    [FileName]   = LEFT(FileName, 30),
+    [DBFileName] = LEFT(DBFileName, 50),
+    FileID,
+    IO_Pending
+  FROM #PendingIO
 
-create table #Results
-(
-  DatabaseID smallint,
-  FileName varchar(128),
-  DBFileName   varchar(255),
-  FileID       int,
-  IO_Pending   bit
-)
+IF @BlockedSessions > 0
+    WAITFOR DELAY '00:00:03'
 
-exec sp_msforeachdb 'use [?]; insert into #Results SELECT vfs.database_id, df.name, df.physical_name
-,vfs.FILE_ID, ior.io_pending
-FROM sys.dm_io_pending_io_requests ior
-INNER JOIN sys.dm_io_virtual_file_stats (DB_ID(), NULL) vfs
-ON (vfs.file_handle = ior.io_handle)
-INNER JOIN sys.database_files df ON (df.FILE_ID = vfs.FILE_ID)'
+GO
 
-print '----------------------'
-print '-- Pending File I/O --'
-print '----------------------'
-print ''
-select 'Database'   = left(db_name(DatabaseID),25),
-       'FileName'   = left(FileName,30),
-       'DBFileName' = left(DBFileName,50),
-       FileID,
-       IO_Pending
-  from #Results
-
-
-
-IF (@Blocks > 0)
-    waitfor delay '00:00:03'
-
-go
-IF (object_id('Now') IS NOT NULL)
-  print 'Procedure created'
+IF OBJECT_ID('dbo.Now') IS NOT NULL
+    PRINT 'Procedure created'
 ELSE
-  print 'Procedure NOT created'
+    PRINT 'Procedure NOT created'
 GO

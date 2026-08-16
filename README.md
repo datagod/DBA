@@ -281,7 +281,7 @@ Scripts in `Procedures/` cover monitoring, maintenance visibility, SSIS, and ale
 | `ExamineStoredProcedure` | `ExamineStoredProcedure.sql` | Stored procedure metadata and definition review |
 | `GenerateIndexesForTable` | `GenerateIndexesForTable.sql` | Index DDL suggestions for a table |
 | `Version` | `Version.sql` | SQL Server version information |
-| `Now` / `Now2` | `Now.sql`, `Now2.sql` | Current date/time helpers |
+| `Now` / `Now2` | `Now.sql`, `Now2.sql` | Current-activity report (`Now` = 2012+, `Now2` = 2019+) |
 
 ### SSIS
 
