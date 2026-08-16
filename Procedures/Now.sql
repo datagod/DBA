@@ -1,9 +1,33 @@
 /*
   Now.sql
-  Current-activity report for SQL Server 2012 (11.x) and later.
 
+  Current-activity report for SQL Server 2012 (11.x) and later.
   Deploy to the tool database, then execute:
-    EXEC dbo.Now
+
+      EXEC dbo.Now
+
+  Purpose
+      Snapshot of what the instance is doing right now: active sessions,
+      blockers, the batch they submitted, the SQL currently running, and
+      any pending file I/O.
+
+  Requirements
+      SQL Server 2012 or later
+      VIEW SERVER STATE
+      Permission to run DBCC INPUTBUFFER against other sessions
+        (typically sysadmin, or VIEW SERVER STATE plus appropriate
+         permissions on the target sessions)
+
+  Notes
+      Now2 is the 2019+ variant. It uses sys.dm_exec_input_buffer.
+      This procedure keeps DBCC INPUTBUFFER so 2012 still works.
+
+      Usage counters (CPU, reads, writes) are since the last instance
+      restart. Sleeping and background sessions are omitted unless they
+      are blocking or blocked.
+
+      If any session is blocked, the procedure waits three seconds at
+      the end so a second EXEC dbo.Now can be compared quickly.
 */
 
 SET ANSI_NULLS ON
@@ -26,25 +50,33 @@ AS
 ---------------------------------------------------------------------------------------------------
 -- Date Created: February 11, 2007
 -- Author:       Bill McEvoy
--- Description:  Current-activity report. Lists active sessions, blockers, the SQL they are
---               running, and pending file I/O.
+-- Description:  Produces a report of current SQL Server activity. Each session that is
+--               actively running, blocking, or blocked is listed with login, host, database,
+--               I/O, CPU, the input buffer, and the SQL currently executing.
 ---------------------------------------------------------------------------------------------------
 -- Version:      1.1
 -- Date Revised: April 22, 2014
 -- Author:       Bill McEvoy
--- Reason:       Wrap database names in square brackets.
+-- Reason:       Wrap database names in square brackets so names with spaces and other
+--               non-alphanumeric characters display correctly.
 ---------------------------------------------------------------------------------------------------
 -- Version:      1.2
 -- Date Revised: August 16, 2026
 -- Author:       Bill McEvoy
--- Reason:       Replace sysprocesses, ::fn_get_sql, and the 20-byte sql_handle with DMVs that
---               exist on SQL Server 2012 and later. Keep the original PRINT / SELECT layout.
+-- Reason:       Replace master.dbo.sysprocesses, ::fn_get_sql, and the old 20-byte sql_handle
+--               with sys.dm_exec_sessions, sys.dm_exec_requests, sys.dm_exec_connections,
+--               and sys.dm_exec_sql_text. Those DMVs exist on SQL Server 2012 and later.
+--               Pending file I/O now uses sys.master_files instead of sp_msforeachdb.
+--               Report layout (PRINT banners and SELECT result sets) is unchanged.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
+---------------------------------------------------------------------
+-- Local variables                                                 --
+---------------------------------------------------------------------
 DECLARE
     @MajorVersion     tinyint,
-    @Version          varchar(10),
+    @Version          varchar(10)    = '1.2',
     @ActiveSessions   int,
     @BlockedSessions  int,
     @TotalSessions    int,
@@ -53,9 +85,12 @@ DECLARE
     @sql_handle       varbinary(64),
     @input_buffer     nvarchar(max),
     @sql_text         nvarchar(max),
-    @HadSessions      bit,
+    @HadSessions      bit            = 0,
     @InputBufferSql   nvarchar(200)
 
+---------------------------------------------------------------------
+-- Version check: SQL Server 2012 (11.x) or later                  --
+---------------------------------------------------------------------
 SET @MajorVersion = CONVERT(tinyint,
     LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
          NULLIF(CHARINDEX('.', CAST(SERVERPROPERTY('ProductVersion') AS varchar(30))), 0) - 1))
@@ -66,8 +101,9 @@ BEGIN
     RETURN
 END
 
-SET @Version = '1.2'
-
+---------------------------------------------------------------------
+-- Working tables                                                  --
+---------------------------------------------------------------------
 IF OBJECT_ID('tempdb..#Sessions') IS NOT NULL
     DROP TABLE #Sessions
 
@@ -98,9 +134,9 @@ IF OBJECT_ID('tempdb..#DBCCResults') IS NOT NULL
 
 CREATE TABLE #DBCCResults
 (
-    EventType  nvarchar(30)   NULL,
-    Parameters int            NULL,
-    EventInfo  nvarchar(max)  NULL
+    EventType  nvarchar(30)  NULL,
+    Parameters int           NULL,
+    EventInfo  nvarchar(max) NULL
 )
 
 IF OBJECT_ID('tempdb..#PendingIO') IS NOT NULL
@@ -108,113 +144,101 @@ IF OBJECT_ID('tempdb..#PendingIO') IS NOT NULL
 
 CREATE TABLE #PendingIO
 (
-    DatabaseID   int            NOT NULL,
-    FileName     sysname        NOT NULL,
-    DBFileName   nvarchar(260)  NOT NULL,
-    FileID       int            NOT NULL,
-    IO_Pending   bit            NOT NULL
+    DatabaseID int           NOT NULL,
+    FileName   sysname       NOT NULL,
+    DBFileName nvarchar(260) NOT NULL,
+    FileID     int           NOT NULL,
+    IO_Pending bit           NOT NULL
 )
 
+---------------------------------------------------------------------
+-- Collect active, blocked, and blocker sessions                   --
+---------------------------------------------------------------------
 ;WITH ActiveSessionIds AS
 (
     SELECT DISTINCT SessionId = x.session_id
-    FROM (
-        SELECT r.session_id
-          FROM sys.dm_exec_requests AS r
-         WHERE r.session_id > 50
-           AND r.session_id <> @@SPID
-           AND r.status NOT IN (N'sleeping', N'background')
+      FROM (
+            SELECT r.session_id
+              FROM sys.dm_exec_requests AS r
+             WHERE r.session_id > 50
+               AND r.session_id <> @@SPID
+               AND r.status NOT IN (N'sleeping', N'background')
 
-        UNION
+            UNION
 
-        SELECT r.session_id
-          FROM sys.dm_exec_requests AS r
-         WHERE r.blocking_session_id > 0
+            SELECT r.session_id
+              FROM sys.dm_exec_requests AS r
+             WHERE r.blocking_session_id > 0
 
-        UNION
+            UNION
 
-        SELECT r.blocking_session_id
-          FROM sys.dm_exec_requests AS r
-         WHERE r.blocking_session_id > 0
-    ) AS x
-    WHERE x.session_id IS NOT NULL
+            SELECT r.blocking_session_id
+              FROM sys.dm_exec_requests AS r
+             WHERE r.blocking_session_id > 0
+           ) AS x
+     WHERE x.session_id IS NOT NULL
 )
 INSERT INTO #Sessions
 (
-    SortOrder,
-    session_id,
-    request_id,
-    blocking_id,
-    is_blocker,
-    login_name,
-    host_name,
-    database_name,
-    status,
-    command,
-    wait_type,
-    cpu_time,
-    phys_io,
-    memory_mb,
-    program_name,
-    login_time,
-    last_request,
+    SortOrder, session_id, request_id, blocking_id, is_blocker,
+    login_name, host_name, database_name, status, command, wait_type,
+    cpu_time, phys_io, memory_mb, program_name, login_time, last_request,
     sql_handle
 )
 SELECT
-    SortOrder = ROW_NUMBER() OVER (ORDER BY ISNULL(r.cpu_time, 0) DESC, a.SessionId),
+    SortOrder     = ROW_NUMBER() OVER (ORDER BY ISNULL(r.cpu_time, 0) DESC, a.SessionId),
     s.session_id,
-    ISNULL(r.request_id, 0),
-    ISNULL(r.blocking_session_id, 0),
-    CASE
-        WHEN EXISTS (
-            SELECT 1
-              FROM sys.dm_exec_requests AS b
-             WHERE b.blocking_session_id = s.session_id
-        ) THEN 1
-        ELSE 0
-    END,
+    request_id    = ISNULL(r.request_id, 0),
+    blocking_id   = ISNULL(r.blocking_session_id, 0),
+    is_blocker    = CASE
+                        WHEN EXISTS (
+                            SELECT 1
+                              FROM sys.dm_exec_requests AS b
+                             WHERE b.blocking_session_id = s.session_id
+                        ) THEN 1
+                        ELSE 0
+                    END,
     s.login_name,
     s.host_name,
-    DB_NAME(COALESCE(r.database_id, s.database_id)),
-    COALESCE(r.status, s.status),
+    database_name = DB_NAME(COALESCE(r.database_id, s.database_id)),
+    status        = COALESCE(r.status, s.status),
     r.command,
-    COALESCE(r.wait_type, r.last_wait_type),
-    ISNULL(r.cpu_time, 0),
-    ISNULL(conn.phys_io, 0),
-    CAST(s.memory_usage * 8192.0 / 1024.0 / 1024.0 AS decimal(12, 2)),
+    wait_type     = COALESCE(r.wait_type, r.last_wait_type),
+    cpu_time      = ISNULL(r.cpu_time, 0),
+    phys_io       = ISNULL(conn.phys_io, 0),
+    memory_mb     = CAST(s.memory_usage * 8192.0 / 1024.0 / 1024.0 AS decimal(12, 2)),
     s.program_name,
     s.login_time,
-    s.last_request_end_time,
-    COALESCE(r.sql_handle, conn.most_recent_sql_handle)
-FROM ActiveSessionIds AS a
-INNER JOIN sys.dm_exec_sessions AS s
+    last_request  = s.last_request_end_time,
+    sql_handle    = COALESCE(r.sql_handle, conn.most_recent_sql_handle)
+  FROM ActiveSessionIds AS a
+ INNER JOIN sys.dm_exec_sessions AS s
     ON s.session_id = a.SessionId
-OUTER APPLY (
-    SELECT TOP (1) r.*
-      FROM sys.dm_exec_requests AS r
-     WHERE r.session_id = s.session_id
-     ORDER BY r.cpu_time DESC, r.request_id DESC
-) AS r
-OUTER APPLY (
-    SELECT TOP (1)
-        phys_io = (
-            SELECT SUM(c2.num_reads + c2.num_writes)
-              FROM sys.dm_exec_connections AS c2
-             WHERE c2.session_id = s.session_id
-        ),
-        c.most_recent_sql_handle
-      FROM sys.dm_exec_connections AS c
-     WHERE c.session_id = s.session_id
-     ORDER BY c.connect_time DESC
-) AS conn
+ OUTER APPLY (
+        SELECT TOP (1) r.*
+          FROM sys.dm_exec_requests AS r
+         WHERE r.session_id = s.session_id
+         ORDER BY r.cpu_time DESC, r.request_id DESC
+ ) AS r
+ OUTER APPLY (
+        SELECT TOP (1)
+            phys_io = (
+                SELECT SUM(c2.num_reads + c2.num_writes)
+                  FROM sys.dm_exec_connections AS c2
+                 WHERE c2.session_id = s.session_id
+            ),
+            c.most_recent_sql_handle
+          FROM sys.dm_exec_connections AS c
+         WHERE c.session_id = s.session_id
+         ORDER BY c.connect_time DESC
+ ) AS conn
 
+---------------------------------------------------------------------
+-- Pending file I/O (instance-wide, no sp_msforeachdb)             --
+---------------------------------------------------------------------
 INSERT INTO #PendingIO
 (
-    DatabaseID,
-    FileName,
-    DBFileName,
-    FileID,
-    IO_Pending
+    DatabaseID, FileName, DBFileName, FileID, IO_Pending
 )
 SELECT
     mf.database_id,
@@ -222,10 +246,10 @@ SELECT
     mf.physical_name,
     mf.file_id,
     ior.io_pending
-FROM sys.dm_io_pending_io_requests AS ior
-INNER JOIN sys.dm_io_virtual_file_stats(NULL, NULL) AS vfs
+  FROM sys.dm_io_pending_io_requests AS ior
+ INNER JOIN sys.dm_io_virtual_file_stats(NULL, NULL) AS vfs
     ON vfs.file_handle = ior.io_handle
-INNER JOIN sys.master_files AS mf
+ INNER JOIN sys.master_files AS mf
     ON mf.database_id = vfs.database_id
    AND mf.file_id = vfs.file_id
 
@@ -233,6 +257,9 @@ SELECT @ActiveSessions  = COUNT(*) FROM #Sessions
 SELECT @BlockedSessions = COUNT(*) FROM #Sessions WHERE blocking_id > 0
 SELECT @TotalSessions   = COUNT(*) FROM sys.dm_exec_sessions
 
+---------------------------------------------------------------------
+-- Header                                                          --
+---------------------------------------------------------------------
 PRINT '===================='
 PRINT '= CURRENT ACTIVITY ='
 PRINT '===================='
@@ -243,6 +270,9 @@ PRINT 'Active  SPIDs: ' + CONVERT(varchar(8), @ActiveSessions)
 PRINT 'Blocked SPIDs: ' + CONVERT(varchar(8), @BlockedSessions)
 PRINT 'Total   SPIDs: ' + CONVERT(varchar(8), @TotalSessions)
 
+---------------------------------------------------------------------
+-- Blocked process summary                                         --
+---------------------------------------------------------------------
 IF @BlockedSessions > 0
 BEGIN
     PRINT ' '
@@ -250,6 +280,7 @@ BEGIN
     PRINT 'Blocked Process Summary'
     PRINT '-----------------------'
     PRINT ' '
+
     SELECT
         [loginame]     = LEFT(login_name, 20),
         [hostname]     = LEFT(host_name, 20),
@@ -274,19 +305,17 @@ BEGIN
      WHERE blocking_id > 0
 END
 
+---------------------------------------------------------------------
+-- Per-session detail: header, input buffer, running SQL           --
+---------------------------------------------------------------------
 DECLARE ActiveSpids_Cursor CURSOR LOCAL FAST_FORWARD FOR
-SELECT
-    session_id,
-    is_blocker,
-    sql_handle
-FROM #Sessions
-ORDER BY SortOrder
+SELECT session_id, is_blocker, sql_handle
+  FROM #Sessions
+ ORDER BY SortOrder
 
 OPEN ActiveSpids_Cursor
 FETCH NEXT FROM ActiveSpids_Cursor
  INTO @session_id, @is_blocker, @sql_handle
-
-SET @HadSessions = 0
 
 WHILE @@FETCH_STATUS = 0
 BEGIN
@@ -331,17 +360,23 @@ BEGIN
       FROM #Sessions
      WHERE session_id = @session_id
 
+    -- DBCC INPUTBUFFER is used instead of sys.dm_exec_input_buffer
+    -- so this procedure still runs on SQL Server 2012.
     PRINT '----------------------'
     PRINT '-- DBCC INPUTBUFFER --'
     PRINT '----------------------'
     PRINT ' '
 
     TRUNCATE TABLE #DBCCResults
+    SET @input_buffer = NULL
     SET @InputBufferSql = N'DBCC INPUTBUFFER(' + CONVERT(nvarchar(12), @session_id) + N') WITH NO_INFOMSGS'
+
     BEGIN TRY
         INSERT INTO #DBCCResults (EventType, Parameters, EventInfo)
         EXEC (@InputBufferSql)
-        SELECT @input_buffer = EventInfo FROM #DBCCResults
+
+        SELECT @input_buffer = EventInfo
+          FROM #DBCCResults
     END TRY
     BEGIN CATCH
         SET @input_buffer = NULL
@@ -355,6 +390,7 @@ BEGIN
     PRINT ' '
     PRINT ' '
 
+    -- sys.dm_exec_sql_text replaces the old ::fn_get_sql(sql_handle)
     SET @sql_text = NULL
     IF @sql_handle IS NOT NULL AND @sql_handle <> 0x
     BEGIN
@@ -364,9 +400,9 @@ BEGIN
 
     IF @sql_text IS NOT NULL AND LTRIM(RTRIM(@sql_text)) <> N''
     BEGIN
-        PRINT '------------------'
-        PRINT '-- dm_exec_sql_text --'
-        PRINT '------------------'
+        PRINT '------------------------'
+        PRINT '-- dm_exec_sql_text() --'
+        PRINT '------------------------'
         PRINT ' '
         PRINT @sql_text
     END
@@ -389,6 +425,9 @@ END
 CLOSE ActiveSpids_Cursor
 DEALLOCATE ActiveSpids_Cursor
 
+---------------------------------------------------------------------
+-- Pending file I/O report                                         --
+---------------------------------------------------------------------
 PRINT '----------------------'
 PRINT '-- Pending File I/O --'
 PRINT '----------------------'
@@ -402,6 +441,9 @@ SELECT
     IO_Pending
   FROM #PendingIO
 
+---------------------------------------------------------------------
+-- If anything is blocked, pause so a second EXEC is easy          --
+---------------------------------------------------------------------
 IF @BlockedSessions > 0
     WAITFOR DELAY '00:00:03'
 
