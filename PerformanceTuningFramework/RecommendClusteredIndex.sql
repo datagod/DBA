@@ -43,9 +43,10 @@ AS
 -- Date Created: June 25, 2026
 -- Author:       Bill McEvoy
 -- Description:  Examines one user table and related DMVs to recommend a clustered index. Prioritizes
---               a single ascending identity column when one already exists. When @SuggestNewColumns
---               is yes, may also recommend adding a new identity column. Default is no: use only
---               columns that already exist on the table.
+--               a single ascending identity column when one already exists. A single integer column
+--               is preferred over any compound key (compound PK, missing-index, or NC key). When
+--               @SuggestNewColumns is yes, may also recommend adding a new identity column. Default
+--               is no: use only columns that already exist on the table.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -165,6 +166,8 @@ CREATE TABLE #ClusteredRecommendation
     IdentityIsAscending        bit            NOT NULL,
     IdentityIsPreferredType    bit            NOT NULL,
     HeuristicColumn            sysname        NULL,
+    IntegerColumn              sysname        NULL,
+    IntegerTypeName            sysname        NULL,
     SuggestionSource           varchar(30)    NOT NULL,
     SuggestedKeyColumns        nvarchar(2000) NOT NULL,
     RecommendationScore        int            NOT NULL,
@@ -431,6 +434,39 @@ HeuristicColumn AS
       ) AS x
      WHERE x.rn = 1
 ),
+BestIntegerColumn AS
+(
+    SELECT
+        x.object_id,
+        IntegerColumn = x.ColumnName,
+        IntegerTypeName = x.TypeName
+      FROM (
+          SELECT
+              c.object_id,
+              c.name AS ColumnName,
+              t.name AS TypeName,
+              rn = ROW_NUMBER() OVER (
+                  ORDER BY
+                      CASE WHEN c.is_identity = 1 THEN 0 ELSE 1 END,
+                      CASE t.name
+                          WHEN ''int'' THEN 1
+                          WHEN ''bigint'' THEN 2
+                          WHEN ''smallint'' THEN 3
+                          WHEN ''tinyint'' THEN 4
+                          ELSE 100
+                      END,
+                      c.column_id
+              )
+            FROM __TARGET_DB__.sys.columns AS c
+           INNER JOIN __TARGET_DB__.sys.types AS t
+              ON t.user_type_id = c.user_type_id
+           WHERE c.object_id = @ObjectId
+             AND c.is_computed = 0
+             AND c.is_sparse = 0
+             AND t.name IN (''tinyint'', ''smallint'', ''int'', ''bigint'')
+      ) AS x
+     WHERE x.rn = 1
+),
 Prepared AS
 (
     SELECT
@@ -466,6 +502,8 @@ Prepared AS
         IdentityIsAscending = ISNULL(bi.IdentityIsAscending, 0),
         IdentityIsPreferredType = ISNULL(bi.IdentityIsPreferredType, 0),
         HeuristicColumn = hc.HeuristicColumn,
+        IntegerColumn = bic.IntegerColumn,
+        IntegerTypeName = bic.IntegerTypeName,
         MissingIndexKeyColumns = NULLIF(LTRIM(RTRIM(
             CASE
                 WHEN NULLIF(LTRIM(RTRIM(mi.MissingIndexEqualityCols)), '''') IS NOT NULL
@@ -495,6 +533,8 @@ Prepared AS
         ON mi.object_id = tt.ObjectID
       LEFT JOIN HeuristicColumn AS hc
         ON hc.object_id = tt.ObjectID
+      LEFT JOIN BestIntegerColumn AS bic
+        ON bic.object_id = tt.ObjectID
 )
 INSERT INTO #ClusteredRecommendation
 (
@@ -531,6 +571,8 @@ INSERT INTO #ClusteredRecommendation
     IdentityIsAscending,
     IdentityIsPreferredType,
     HeuristicColumn,
+    IntegerColumn,
+    IntegerTypeName,
     SuggestionSource,
     SuggestedKeyColumns,
     RecommendationScore,
@@ -573,6 +615,8 @@ SELECT
     p.IdentityIsAscending,
     p.IdentityIsPreferredType,
     p.HeuristicColumn,
+    p.IntegerColumn,
+    p.IntegerTypeName,
     SuggestionSource = ''PENDING'',
     SuggestedKeyColumns = '''',
     RecommendationScore = 0,
@@ -631,7 +675,18 @@ UPDATE r
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN 'ADD_IDENTITY'
+           WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN 'PRIMARY_KEY'
+           WHEN r.IntegerColumn IS NOT NULL THEN 'SINGLE_INTEGER'
            WHEN r.PrimaryKeyColumns IS NOT NULL THEN 'PRIMARY_KEY'
+           WHEN r.MissingIndexKeyColumns IS NOT NULL
+                AND ISNULL(r.MissingIndexImpact, 0) >= 10000
+                AND CHARINDEX(',', r.MissingIndexKeyColumns) = 0
+               THEN 'MISSING_INDEX'
+           WHEN r.TopNcKeyColumns IS NOT NULL
+                AND r.TopNcTotalReads > 0
+                AND CHARINDEX(',', r.TopNcKeyColumns) = 0
+               THEN 'NC_INDEX_USAGE'
+           WHEN r.MissingIndexKeyColumns IS NOT NULL AND CHARINDEX(',', r.MissingIndexKeyColumns) = 0 THEN 'MISSING_INDEX'
            WHEN r.MissingIndexKeyColumns IS NOT NULL AND ISNULL(r.MissingIndexImpact, 0) >= 10000 THEN 'MISSING_INDEX'
            WHEN r.TopNcKeyColumns IS NOT NULL AND r.TopNcTotalReads > 0 THEN 'NC_INDEX_USAGE'
            WHEN r.MissingIndexKeyColumns IS NOT NULL THEN 'MISSING_INDEX'
@@ -659,7 +714,18 @@ UPDATE r
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN QUOTENAME(@ProposedIdentityCol) + ' ASC'
+           WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN r.PrimaryKeyColumns
+           WHEN r.IntegerColumn IS NOT NULL THEN QUOTENAME(r.IntegerColumn) + ' ASC'
            WHEN r.PrimaryKeyColumns IS NOT NULL THEN r.PrimaryKeyColumns
+           WHEN r.MissingIndexKeyColumns IS NOT NULL
+                AND ISNULL(r.MissingIndexImpact, 0) >= 10000
+                AND CHARINDEX(',', r.MissingIndexKeyColumns) = 0
+               THEN r.MissingIndexKeyColumns
+           WHEN r.TopNcKeyColumns IS NOT NULL
+                AND r.TopNcTotalReads > 0
+                AND CHARINDEX(',', r.TopNcKeyColumns) = 0
+               THEN r.TopNcKeyColumns
+           WHEN r.MissingIndexKeyColumns IS NOT NULL AND CHARINDEX(',', r.MissingIndexKeyColumns) = 0 THEN r.MissingIndexKeyColumns
            WHEN r.MissingIndexKeyColumns IS NOT NULL AND ISNULL(r.MissingIndexImpact, 0) >= 10000 THEN r.MissingIndexKeyColumns
            WHEN r.TopNcKeyColumns IS NOT NULL AND r.TopNcTotalReads > 0 THEN r.TopNcKeyColumns
            WHEN r.MissingIndexKeyColumns IS NOT NULL THEN r.MissingIndexKeyColumns
@@ -675,7 +741,10 @@ UPDATE r
            + CASE WHEN ISNULL(r.MissingIndexImpact, 0) >= 1000000 THEN 20 WHEN ISNULL(r.MissingIndexImpact, 0) >= 100000 THEN 12 WHEN ISNULL(r.MissingIndexImpact, 0) >= 10000 THEN 6 ELSE 0 END
            + CASE WHEN @PreferIdentity = 1 AND r.IdentityColumn IS NOT NULL AND r.IdentityIsAscending = 1 THEN 25 ELSE 0 END
            + CASE WHEN @PreferIdentity = 1 AND @SuggestNewColumnsOn = 1 AND r.IdentityColumn IS NULL AND r.PrimaryKeyColumns IS NULL THEN 15 ELSE 0 END
-           + CASE WHEN r.PrimaryKeyColumns IS NOT NULL THEN 10 ELSE 0 END
+           + CASE WHEN r.IntegerColumn IS NOT NULL THEN 18 ELSE 0 END
+           + CASE WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN 10
+                  WHEN r.PrimaryKeyColumns IS NOT NULL THEN 4
+                  ELSE 0 END
            + CASE WHEN ISNULL(r.AvgFragmentationPct, 0) >= 30 THEN 5 ELSE 0 END
   FROM #ClusteredRecommendation AS r
 
@@ -691,6 +760,8 @@ UPDATE r
                     + ']. A single ascending identity column [' + r.IdentityColumn + '] is available and is preferred for insert locality.'
                WHEN 'ALREADY_CLUSTERED' THEN 'Table already has clustered index [' + ISNULL(r.ExistingClusteredIndexName, '?') + '] on ('
                     + ISNULL(r.ExistingClusteredKeyColumns, '?') + '). No change recommended unless workload analysis suggests otherwise.'
+               WHEN 'SINGLE_INTEGER' THEN 'Single integer column [' + r.IntegerColumn + '] (' + ISNULL(r.IntegerTypeName, '?')
+                    + ') is preferred over a compound clustering key. Narrow integer keys keep the clustered index and all nonclustered leaf pointers small.'
                WHEN 'PRIMARY_KEY' THEN 'Nonclustered primary key columns should be clustered to eliminate RID lookups and stabilize nonclustered index leaf pointers.'
                WHEN 'MISSING_INDEX' THEN 'Missing-index DMVs show sustained access patterns on these key columns (impact score '
                     + ISNULL(CONVERT(varchar(20), CONVERT(bigint, r.MissingIndexImpact)), '0') + ').'
