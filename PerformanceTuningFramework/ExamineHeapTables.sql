@@ -172,24 +172,24 @@ SET @Sql = N'
         s.name AS SchemaName,
         o.name AS TableName,
         o.object_id AS ObjectID
-      FROM ' + @QuotedDatabase + N'.sys.objects AS o
-     INNER JOIN ' + @QuotedDatabase + N'.sys.schemas AS s
+      FROM __TARGET_DB__.sys.objects AS o
+     INNER JOIN __TARGET_DB__.sys.schemas AS s
         ON s.schema_id = o.schema_id
      WHERE o.type = ''U''
        AND s.name LIKE @SchemaFilter
        AND o.name LIKE @TableFilter
        AND EXISTS (
            SELECT 1
-             FROM ' + @QuotedDatabase + N'.sys.indexes AS hi
+             FROM __TARGET_DB__.sys.indexes AS hi
             WHERE hi.object_id = o.object_id
               AND hi.index_id = 0
        )
        AND NOT EXISTS (
            SELECT 1
-             FROM ' + @QuotedDatabase + N'.sys.indexes AS ci
+             FROM __TARGET_DB__.sys.indexes AS ci
             WHERE ci.object_id = o.object_id
               AND ci.index_id > 0
-              AND ' + @ClusteredTypeFilter + N'
+              AND __CLUSTERED_FILTER__
        )
 ),
 HeapPhysical AS
@@ -201,7 +201,7 @@ HeapPhysical AS
         SizeMB = SUM(ips.page_count) * 8.0 / 1024.0,
         ForwardedRecordCount = SUM(ISNULL(ips.forwarded_record_count, 0)),
         AvgFragmentationPct = MAX(ips.avg_fragmentation_in_percent)
-      FROM ' + @QuotedDatabase + N'.sys.dm_db_index_physical_stats(@TargetDatabaseId, NULL, NULL, NULL, ''LIMITED'') AS ips
+      FROM __TARGET_DB__.sys.dm_db_index_physical_stats(@TargetDatabaseId, NULL, NULL, NULL, ''LIMITED'') AS ips
      INNER JOIN HeapTables AS ht
         ON ht.ObjectID = ips.object_id
      WHERE ips.index_id = 0
@@ -227,7 +227,7 @@ NcIndexCounts AS
     SELECT
         i.object_id,
         NonClusteredIndexCount = COUNT(*)
-      FROM ' + @QuotedDatabase + N'.sys.indexes AS i
+      FROM __TARGET_DB__.sys.indexes AS i
      INNER JOIN HeapTables AS ht
         ON ht.ObjectID = i.object_id
      WHERE i.index_id > 0
@@ -242,8 +242,8 @@ PrimaryKeyColumns AS
         PrimaryKeyIsUnique = i.is_unique,
         PrimaryKeyColumns = STUFF((
             SELECT '', '' + QUOTENAME(c.name)
-              FROM ' + @QuotedDatabase + N'.sys.index_columns AS ic
-             INNER JOIN ' + @QuotedDatabase + N'.sys.columns AS c
+              FROM __TARGET_DB__.sys.index_columns AS ic
+             INNER JOIN __TARGET_DB__.sys.columns AS c
                 ON c.object_id = ic.object_id
                AND c.column_id = ic.column_id
              WHERE ic.object_id = i.object_id
@@ -253,7 +253,7 @@ PrimaryKeyColumns AS
              ORDER BY ic.key_ordinal
              FOR XML PATH(''''), TYPE
         ).value(''.'', ''nvarchar(max)''), 1, 2, '''')
-      FROM ' + @QuotedDatabase + N'.sys.indexes AS i
+      FROM __TARGET_DB__.sys.indexes AS i
      INNER JOIN HeapTables AS ht
         ON ht.ObjectID = i.object_id
      WHERE i.is_primary_key = 1
@@ -273,8 +273,8 @@ TopNcIndex AS
               TopNcKeyColumns = STUFF((
                   SELECT '', '' + QUOTENAME(c.name)
                         + CASE WHEN ic.is_descending_key = 1 THEN '' DESC'' ELSE '' ASC'' END
-                    FROM ' + @QuotedDatabase + N'.sys.index_columns AS ic
-                   INNER JOIN ' + @QuotedDatabase + N'.sys.columns AS c
+                    FROM __TARGET_DB__.sys.index_columns AS ic
+                   INNER JOIN __TARGET_DB__.sys.columns AS c
                       ON c.object_id = ic.object_id
                      AND c.column_id = ic.column_id
                    WHERE ic.object_id = i.object_id
@@ -289,7 +289,7 @@ TopNcIndex AS
                   ORDER BY ISNULL(us.user_seeks, 0) + ISNULL(us.user_scans, 0) + ISNULL(us.user_lookups, 0) DESC,
                            i.index_id
               )
-            FROM ' + @QuotedDatabase + N'.sys.indexes AS i
+            FROM __TARGET_DB__.sys.indexes AS i
            INNER JOIN HeapTables AS ht
               ON ht.ObjectID = i.object_id
             LEFT JOIN sys.dm_db_index_usage_stats AS us
@@ -307,7 +307,7 @@ IdentityColumns AS
     SELECT
         c.object_id,
         IdentityColumn = MIN(c.name)
-      FROM ' + @QuotedDatabase + N'.sys.columns AS c
+      FROM __TARGET_DB__.sys.columns AS c
      INNER JOIN HeapTables AS ht
         ON ht.ObjectID = c.object_id
      WHERE c.is_identity = 1
@@ -332,10 +332,10 @@ MissingIndexBest AS
                   PARTITION BY mid.object_id
                   ORDER BY migs.avg_user_impact * (migs.user_seeks + migs.user_scans) DESC
               )
-            FROM ' + @QuotedDatabase + N'.sys.dm_db_missing_index_group_stats AS migs
-           INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_groups AS mig
+            FROM __TARGET_DB__.sys.dm_db_missing_index_group_stats AS migs
+           INNER JOIN __TARGET_DB__.sys.dm_db_missing_index_groups AS mig
               ON mig.index_group_handle = migs.group_handle
-           INNER JOIN ' + @QuotedDatabase + N'.sys.dm_db_missing_index_details AS mid
+           INNER JOIN __TARGET_DB__.sys.dm_db_missing_index_details AS mid
               ON mid.index_handle = mig.index_handle
            INNER JOIN HeapTables AS ht
               ON ht.ObjectID = mid.object_id
@@ -359,18 +359,21 @@ HeuristicColumn AS
                           WHEN ''tinyint'' THEN 1
                           WHEN ''smallint'' THEN 2
                           WHEN ''int'' THEN 3
-                          WHEN ''bigint'' THEN 4' + @HeuristicTypeOrder + N'
+                          WHEN ''bigint'' THEN 4
+                          WHEN ''date'' THEN 5
+                          WHEN ''datetime'' THEN 6
+                          WHEN ''datetime2'' THEN 7
                           ELSE 100
                       END,
                       c.column_id
               )
-            FROM ' + @QuotedDatabase + N'.sys.columns AS c
+            FROM __TARGET_DB__.sys.columns AS c
            INNER JOIN HeapTables AS ht
               ON ht.ObjectID = c.object_id
-           INNER JOIN ' + @QuotedDatabase + N'.sys.types AS t
+           INNER JOIN __TARGET_DB__.sys.types AS t
               ON t.user_type_id = c.user_type_id
            WHERE c.is_computed = 0
-             ' + @SparseFilter + N'
+             AND c.is_sparse = 0
              AND t.name NOT IN (''text'', ''ntext'', ''image'', ''xml'', ''varchar'', ''nvarchar'', ''varbinary'')
       ) AS x
      WHERE x.rn = 1
@@ -583,6 +586,9 @@ SELECT
               ELSE NULL
           END
   FROM Scored AS s'
+
+SET @Sql = REPLACE(@Sql, N'__TARGET_DB__', @QuotedDatabase)
+SET @Sql = REPLACE(@Sql, N'__CLUSTERED_FILTER__', @ClusteredTypeFilter)
 
 EXEC sys.sp_executesql
     @Sql,
