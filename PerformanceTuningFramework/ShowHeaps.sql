@@ -1,16 +1,12 @@
-
 /*
   ShowHeaps.sql
   Performance Tuning Framework
 
   Requires SQL Server 2008 (10.x) or later on the instance.
   Target database compatibility level 100+ (SQL Server 2008 mode).
-  Supports newer instances (for example SQL Server 2022) examining older-compat databases.
 
   Deploy to the tool database, then execute:
     EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
-
-  Analyzes user-table heaps via DMVs and recommends a clustered index per table.
 */
 
 SET ANSI_NULLS ON
@@ -25,7 +21,14 @@ BEGIN
 END
 GO
 
-PRINT 'Creating: ShowHeaps (2026-06-25)'
+IF OBJECT_ID('dbo.ExamineHeapTables') IS NOT NULL
+BEGIN
+    PRINT 'Dropping leftover: ExamineHeapTables'
+    DROP PROCEDURE dbo.ExamineHeapTables
+END
+GO
+
+PRINT 'Creating: ShowHeaps'
 GO
 
 CREATE PROCEDURE dbo.ShowHeaps
@@ -44,14 +47,12 @@ AS
 -- Author:       Bill McEvoy
 -- Description:  Identifies heap tables in a target database, analyzes DMV usage patterns and
 --               missing-index signals, and recommends a strong clustered index for each heap.
---               Version-aware: instance version controls ONLINE index DDL; target compatibility
---               level controls database catalog and index-type logic.
+--               Version-aware for SQL Server 2008+ instances and compatibility level 100+ databases.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
 DECLARE
     @MajorVersion        tinyint,
-    @TargetCompatMajor   tinyint,
     @EngineEdition       int,
     @CompatibilityLevel  int,
     @ServerName          sysname,
@@ -61,8 +62,9 @@ DECLARE
     @ClusteredTypeFilter nvarchar(40),
     @IndexWithOptions    nvarchar(200),
     @IndexWithOptionsNC  nvarchar(200),
+    @HeuristicTypeOrder  nvarchar(max),
+    @SparseFilter        nvarchar(100),
     @SortByUpper         varchar(10),
-    @ReportedCompatLevel int,
     @HeapCount           int,
     @HighPriority        int,
     @CaptureDate         datetime
@@ -103,34 +105,34 @@ SELECT @CompatibilityLevel = d.compatibility_level
   FROM sys.databases AS d
  WHERE d.database_id = @TargetDatabaseId
 
-SET @ReportedCompatLevel = ISNULL(@CompatibilityLevel, 0)
-
-IF @ReportedCompatLevel < 100
+IF ISNULL(@CompatibilityLevel, 0) < 100
 BEGIN
-    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, @ReportedCompatLevel)
+    RAISERROR('Target database ''%s'' compatibility level %d is below 100 (SQL Server 2008).', 16, 1, @TargetDatabase, @CompatibilityLevel)
     RETURN
 END
-
-SET @TargetCompatMajor = CONVERT(tinyint, @CompatibilityLevel / 10)
 
 SET @EngineEdition = CAST(SERVERPROPERTY('EngineEdition') AS int)
 SET @ServerName    = CAST(SERVERPROPERTY('MachineName') AS sysname)
                      + ISNULL('\' + CAST(SERVERPROPERTY('InstanceName') AS varchar(30)), '')
 SET @CaptureDate   = GETDATE()
 
--- Target database compatibility drives catalog/index-type behavior.
-IF @CompatibilityLevel >= 110
+IF @MajorVersion >= 11
     SET @ClusteredTypeFilter = N'ci.type IN (1, 5)'
 ELSE
     SET @ClusteredTypeFilter = N'ci.type = 1'
 
--- Instance edition/version drives whether ONLINE rebuild is offered in suggested DDL.
 IF @MajorVersion >= 10 AND @EngineEdition IN (3, 5)
     SET @IndexWithOptions = N'ONLINE = ON, SORT_IN_TEMPDB = ON'
 ELSE
     SET @IndexWithOptions = N'SORT_IN_TEMPDB = ON'
 
 SET @IndexWithOptionsNC = @IndexWithOptions
+
+SET @SparseFilter = N'AND c.is_sparse = 0'
+SET @HeuristicTypeOrder = N'
+                          WHEN ''date'' THEN 5
+                          WHEN ''datetime'' THEN 6
+                          WHEN ''datetime2'' THEN 7'
 
 IF OBJECT_ID('tempdb..#HeapAnalysis') IS NOT NULL
     DROP TABLE #HeapAnalysis
@@ -156,7 +158,6 @@ CREATE TABLE #HeapAnalysis
     MissingIndexEqualityCols  nvarchar(2000) NULL,
     MissingIndexInequalityCols nvarchar(2000) NULL,
     MissingIndexIncludedCols  nvarchar(2000) NULL,
-    MissingIndexKeyColumns    nvarchar(2000) NULL,
     PrimaryKeyColumns         nvarchar(2000) NULL,
     PrimaryKeyIsUnique        bit            NOT NULL,
     TopNcIndexName            sysname        NULL,
@@ -460,7 +461,7 @@ Scored AS
             WHEN p.MissingIndexKeyColumns IS NOT NULL THEN p.MissingIndexKeyColumns
             WHEN p.IdentityColumn IS NOT NULL THEN QUOTENAME(p.IdentityColumn) + '' ASC''
             WHEN p.HeuristicColumn IS NOT NULL THEN QUOTENAME(p.HeuristicColumn) + '' ASC''
-            ELSE ''Manual review required''
+            ELSE ''/* review table columns manually */''
         END,
         RecommendationScore =
               CASE WHEN ISNULL(p.PageCount, 0) >= 10000 THEN 20 WHEN ISNULL(p.PageCount, 0) >= 1000 THEN 12 WHEN ISNULL(p.PageCount, 0) >= 100 THEN 6 ELSE 2 END
@@ -493,7 +494,6 @@ INSERT INTO #HeapAnalysis
     MissingIndexEqualityCols,
     MissingIndexInequalityCols,
     MissingIndexIncludedCols,
-    MissingIndexKeyColumns,
     PrimaryKeyColumns,
     PrimaryKeyIsUnique,
     TopNcIndexName,
@@ -508,7 +508,14 @@ INSERT INTO #HeapAnalysis
     SuggestedNonClusteredDdl
 )
 SELECT
-    SortKey = CAST(s.RecommendationScore AS decimal(18, 4)),
+    SortKey = CASE @SortByUpper
+                  WHEN ''SIZE'' THEN CAST(s.SizeMB AS decimal(18, 4))
+                  WHEN ''SCANS'' THEN CAST(s.HeapScans AS decimal(18, 4))
+                  WHEN ''UPDATES'' THEN CAST(s.HeapUpdates AS decimal(18, 4))
+                  WHEN ''IMPACT'' THEN ISNULL(s.MissingIndexImpact, 0)
+                  WHEN ''OBJECT'' THEN CAST(CHECKSUM(s.SchemaName, s.TableName) AS decimal(18, 4))
+                  ELSE CAST(s.RecommendationScore AS decimal(18, 4))
+              END,
     s.SchemaName,
     s.TableName,
     s.ObjectID,
@@ -527,7 +534,6 @@ SELECT
     s.MissingIndexEqualityCols,
     s.MissingIndexInequalityCols,
     s.MissingIndexIncludedCols,
-    s.MissingIndexKeyColumns,
     s.PrimaryKeyColumns,
     s.PrimaryKeyIsUnique,
     s.TopNcIndexName,
@@ -537,9 +543,55 @@ SELECT
     s.SuggestionSource,
     s.SuggestedKeyColumns,
     s.RecommendationScore,
-    RecommendationRationale = '''',
-    SuggestedClusteredDdl = '''',
-    SuggestedNonClusteredDdl = NULL
+    RecommendationRationale =
+          CASE s.SuggestionSource
+              WHEN ''PRIMARY_KEY'' THEN ''Heap has a nonclustered primary key; clustering the PK columns removes RID lookups and stabilizes NC index leaf pointers.''
+              WHEN ''MISSING_INDEX'' THEN ''Missing-index DMVs show sustained seek/scan patterns on these key columns (impact score '' + ISNULL(CAST(CAST(s.MissingIndexImpact AS bigint) AS varchar(20)), ''0'') + '').''
+              WHEN ''NC_INDEX_USAGE'' THEN ''Most-used nonclustered index ['' + ISNULL(s.TopNcIndexName, ''?'') + ''] indicates lookup columns that are strong clustered-index candidates.''
+              WHEN ''IDENTITY'' THEN ''No stronger DMV signal found; identity column provides a narrow, ever-increasing clustering key.''
+              ELSE ''No PK, missing-index, or NC-usage signal; heuristic narrow key column selected for initial clustering.''
+          END
+        + CASE WHEN s.ForwardedRecordCount > 0 THEN '' Forwarded records ('' + CAST(s.ForwardedRecordCount AS varchar(20)) + '') indicate update pressure on this heap.'' ELSE '''' END
+        + CASE WHEN s.NonClusteredIndexCount >= 3 THEN '' Multiple NC indexes on a heap amplify RID lookup and maintenance cost.'' ELSE '''' END
+        + CASE
+              WHEN s.PrimaryKeyColumns IS NOT NULL
+               AND s.MissingIndexKeyColumns IS NOT NULL
+               AND s.SuggestionSource = ''PRIMARY_KEY''
+               AND s.MissingIndexKeyColumns <> s.PrimaryKeyColumns
+                  THEN '' Additional missing-index signal suggests a separate nonclustered index (see SuggestedNonClusteredDdl).''
+              ELSE ''''
+          END,
+    SuggestedClusteredDdl =
+          CASE
+              WHEN s.SuggestedKeyColumns LIKE ''/*%'' THEN ''-- Manual review required for '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
+              WHEN s.PrimaryKeyColumns IS NOT NULL AND s.PrimaryKeyIsUnique = 1 THEN
+                  ''CREATE UNIQUE CLUSTERED INDEX '' + QUOTENAME(''CX_'' + s.TableName)
+                  + '' ON '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
+                  + '' ('' + s.SuggestedKeyColumns + '') WITH ('' + @IndexWithOptions + '');''
+              ELSE
+                  ''CREATE CLUSTERED INDEX '' + QUOTENAME(''CX_'' + s.TableName)
+                  + '' ON '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
+                  + '' ('' + s.SuggestedKeyColumns + '') WITH ('' + @IndexWithOptions + '', FILLFACTOR = 90);''
+          END,
+    SuggestedNonClusteredDdl =
+          CASE
+              WHEN s.MissingIndexKeyColumns IS NOT NULL
+               AND (
+                       s.SuggestionSource <> ''MISSING_INDEX''
+                    OR s.PrimaryKeyColumns IS NOT NULL
+                   )
+               AND s.MissingIndexKeyColumns <> ISNULL(s.SuggestedKeyColumns, '''')
+                  THEN ''CREATE NONCLUSTERED INDEX '' + QUOTENAME(''IX_'' + s.TableName + ''_MissingSignal'')
+                     + '' ON '' + QUOTENAME(s.SchemaName) + ''.'' + QUOTENAME(s.TableName)
+                     + '' ('' + s.MissingIndexKeyColumns + '')''
+                     + CASE
+                           WHEN NULLIF(LTRIM(RTRIM(s.MissingIndexIncludedCols)), '''') IS NOT NULL
+                               THEN '' INCLUDE ('' + s.MissingIndexIncludedCols + '')''
+                           ELSE ''''
+                       END
+                     + '' WITH ('' + @IndexWithOptionsNC + '');''
+              ELSE NULL
+          END
   FROM Scored AS s'
 
 SET @Sql = REPLACE(@Sql, N'__TARGET_DB__', @QuotedDatabase)
@@ -550,80 +602,17 @@ EXEC sys.sp_executesql
     N'@TargetDatabaseId int,
       @SchemaFilter sysname,
       @TableFilter sysname,
-      @MinPageCount int',
+      @MinPageCount int,
+      @SortByUpper varchar(10),
+      @IndexWithOptions nvarchar(200),
+      @IndexWithOptionsNC nvarchar(200)',
     @TargetDatabaseId = @TargetDatabaseId,
     @SchemaFilter = @SchemaFilter,
     @TableFilter = @TableFilter,
-    @MinPageCount = @MinPageCount
-
-UPDATE h
-   SET SortKey = CASE @SortByUpper
-                     WHEN 'SIZE' THEN CAST(h.SizeMB AS decimal(18, 4))
-                     WHEN 'SCANS' THEN CAST(h.HeapScans AS decimal(18, 4))
-                     WHEN 'UPDATES' THEN CAST(h.HeapUpdates AS decimal(18, 4))
-                     WHEN 'IMPACT' THEN ISNULL(h.MissingIndexImpact, 0)
-                     WHEN 'OBJECT' THEN CAST(CHECKSUM(h.SchemaName, h.TableName) AS decimal(18, 4))
-                     ELSE CAST(h.RecommendationScore AS decimal(18, 4))
-                 END,
-       RecommendationRationale =
-           CASE h.SuggestionSource
-               WHEN 'PRIMARY_KEY' THEN 'Heap has a nonclustered primary key; clustering the PK columns removes RID lookups and stabilizes NC index leaf pointers.'
-               WHEN 'MISSING_INDEX' THEN 'Missing-index DMVs show sustained seek/scan patterns on these key columns (impact score '
-                    + ISNULL(CONVERT(varchar(20), CONVERT(bigint, h.MissingIndexImpact)), '0') + ').'
-               WHEN 'NC_INDEX_USAGE' THEN 'Most-used nonclustered index [' + ISNULL(h.TopNcIndexName, '?')
-                    + '] indicates lookup columns that are strong clustered-index candidates.'
-               WHEN 'IDENTITY' THEN 'No stronger DMV signal found; identity column provides a narrow, ever-increasing clustering key.'
-               ELSE 'No PK, missing-index, or NC-usage signal; heuristic narrow key column selected for initial clustering.'
-           END
-         + CASE WHEN h.ForwardedRecordCount > 0
-                THEN ' Forwarded records (' + CAST(h.ForwardedRecordCount AS varchar(20)) + ') indicate update pressure on this heap.'
-                ELSE ''
-           END
-         + CASE WHEN h.NonClusteredIndexCount >= 3
-                THEN ' Multiple NC indexes on a heap amplify RID lookup and maintenance cost.'
-                ELSE ''
-           END
-         + CASE
-               WHEN h.PrimaryKeyColumns IS NOT NULL
-                AND h.MissingIndexKeyColumns IS NOT NULL
-                AND h.SuggestionSource = 'PRIMARY_KEY'
-                AND h.MissingIndexKeyColumns <> h.PrimaryKeyColumns
-                   THEN ' Additional missing-index signal suggests a separate nonclustered index (see SuggestedNonClusteredDdl).'
-               ELSE ''
-           END,
-       SuggestedClusteredDdl =
-           CASE
-               WHEN h.SuggestedKeyColumns = 'Manual review required' THEN
-                   '-- Manual review required for ' + QUOTENAME(h.SchemaName) + '.' + QUOTENAME(h.TableName)
-               WHEN h.PrimaryKeyColumns IS NOT NULL AND h.PrimaryKeyIsUnique = 1 THEN
-                   'CREATE UNIQUE CLUSTERED INDEX ' + QUOTENAME('CX_' + h.TableName)
-                   + ' ON ' + QUOTENAME(h.SchemaName) + '.' + QUOTENAME(h.TableName)
-                   + ' (' + h.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ');'
-               ELSE
-                   'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + h.TableName)
-                   + ' ON ' + QUOTENAME(h.SchemaName) + '.' + QUOTENAME(h.TableName)
-                   + ' (' + h.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
-           END,
-       SuggestedNonClusteredDdl =
-           CASE
-               WHEN h.MissingIndexKeyColumns IS NOT NULL
-                AND (
-                        h.SuggestionSource <> 'MISSING_INDEX'
-                     OR h.PrimaryKeyColumns IS NOT NULL
-                    )
-                AND h.MissingIndexKeyColumns <> ISNULL(h.SuggestedKeyColumns, '')
-                   THEN 'CREATE NONCLUSTERED INDEX ' + QUOTENAME('IX_' + h.TableName + '_MissingSignal')
-                      + ' ON ' + QUOTENAME(h.SchemaName) + '.' + QUOTENAME(h.TableName)
-                      + ' (' + h.MissingIndexKeyColumns + ')'
-                      + CASE
-                            WHEN NULLIF(LTRIM(RTRIM(h.MissingIndexIncludedCols)), '') IS NOT NULL
-                                THEN ' INCLUDE (' + h.MissingIndexIncludedCols + ')'
-                            ELSE ''
-                        END
-                      + ' WITH (' + @IndexWithOptionsNC + ');'
-               ELSE NULL
-           END
-  FROM #HeapAnalysis AS h
+    @MinPageCount = @MinPageCount,
+    @SortByUpper = @SortByUpper,
+    @IndexWithOptions = @IndexWithOptions,
+    @IndexWithOptionsNC = @IndexWithOptionsNC
 
 SELECT
     @HeapCount = COUNT(*),
@@ -643,11 +632,10 @@ BEGIN
         MinPageCount = @MinPageCount,
         TopN = @TopN,
         SortBy = @SortByUpper,
-        SqlInstanceMajorVersion = @MajorVersion,
-        TargetCompatibilityLevel = @CompatibilityLevel,
-        TargetCompatMajorVersion = @TargetCompatMajor,
+        SqlMajorVersion = @MajorVersion,
+        CompatibilityLevel = @CompatibilityLevel,
         IndexWithOptions = @IndexWithOptions,
-        Note = 'Instance and target compatibility differ by design when a newer SQL Server hosts an older-compat database. Analysis uses target compatibility level; ONLINE DDL option uses instance edition. Usage stats are since instance restart.'
+        Note = 'Usage stats are since instance restart. ONLINE index option appears only on Enterprise/Developer. Review SuggestedClusteredDdl and test during a maintenance window.'
 
     SELECT TOP (@TopN)
         SchemaName,
@@ -681,13 +669,5 @@ BEGIN
       FROM #HeapAnalysis
      ORDER BY SortKey DESC, SchemaName, TableName
 END
-
 GO
 
-IF OBJECT_ID('dbo.ShowHeaps') IS NOT NULL
-    PRINT 'ShowHeaps created successfully.'
-ELSE
-BEGIN
-    RAISERROR('ShowHeaps was not created. Fix syntax errors above and redeploy this script only.', 16, 1)
-END
-GO
