@@ -161,6 +161,7 @@ Stored procedure that finds user-table heaps in a target database, analyzes DMV 
 
 - Identifies tables without a clustered rowstore or columnstore index
 - Reports heap usage from `sys.dm_db_index_usage_stats` (seeks, scans, lookups, updates)
+- Reports record counts from `sys.partitions` (always populated, including under LIMITED mode)
 - Reports forwarded records, fragmentation, size, and nonclustered index count from `sys.dm_db_index_physical_stats`
 - Ranks missing-index signals from `sys.dm_db_missing_index_*` per heap
 - Considers existing nonclustered primary keys, most-used nonclustered indexes, identity columns, and narrow-key heuristics
@@ -172,6 +173,7 @@ Deployment:
 -- Run ShowHeaps.sql in the tool database
 EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
 EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'SCANS', @MinPageCount = 1000
+EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @ScanMode = 'SAMPLED'
 ```
 
 Parameters:
@@ -181,7 +183,8 @@ Parameters:
 - `@TableFilter` — table name filter (default `%`)
 - `@MinPageCount` — minimum heap page count to include (default `100`)
 - `@TopN` — maximum heap rows returned in the detail result set (default `100`)
-- `@SortBy` — `SCORE`, `SIZE`, `SCANS`, `UPDATES`, `IMPACT`, or `OBJECT` (default `SCORE`)
+- `@SortBy` — `SCORE`, `SIZE`, `ROWS`, `SCANS`, `UPDATES`, `IMPACT`, or `OBJECT` (default `SCORE`)
+- `@ScanMode` — `LIMITED`, `SAMPLED`, or `DETAILED` for `sys.dm_db_index_physical_stats` (default `LIMITED`)
 - `@ReturnResultSets` — return summary and detail result sets (default `1`)
 
 Recommendation priority:
@@ -193,7 +196,7 @@ Recommendation priority:
 5. Identity column
 6. Heuristic narrow key column
 
-Note: usage statistics reset when the SQL Server instance restarts. When the host instance is newer than the target compatibility level (for example SQL Server 2022 with compatibility level 100), heap detection and recommendations honor the target database mode. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
+Note: `LIMITED` does not scan heap data pages, so forwarded-record and fragmentation numbers stay empty unless `@ScanMode` is `SAMPLED` or `DETAILED`. Record counts always come from `sys.partitions`. Usage statistics reset when the SQL Server instance restarts. When the host instance is newer than the target compatibility level (for example SQL Server 2022 with compatibility level 100), heap detection and recommendations honor the target database mode. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
 
 
 ### ShowTableInfo
