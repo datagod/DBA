@@ -7,6 +7,11 @@
 
   Deploy to the tool database, then execute:
     EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase'
+    EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @ScanMode = N'SAMPLED'
+
+  Record counts come from sys.partitions. @ScanMode (LIMITED by default)
+  controls sys.dm_db_index_physical_stats. LIMITED does not scan heap data
+  pages, so forwarded records and fragmentation need SAMPLED or DETAILED.
 */
 
 SET ANSI_NULLS ON
@@ -39,6 +44,7 @@ CREATE PROCEDURE dbo.ShowHeaps
     @MinPageCount     int          = 100,
     @TopN             int          = 100,
     @SortBy           varchar(10)  = 'SCORE',
+    @ScanMode         varchar(10)  = 'LIMITED',
     @ReturnResultSets bit          = 1
 )
 AS
@@ -65,6 +71,7 @@ DECLARE
     @HeuristicTypeOrder  nvarchar(max),
     @SparseFilter        nvarchar(100),
     @SortByUpper         varchar(10),
+    @ScanModeUpper       varchar(10),
     @HeapCount           int,
     @HighPriority        int,
     @CaptureDate         datetime
@@ -88,8 +95,12 @@ IF @MinPageCount < 0
     SET @MinPageCount = 0
 
 SET @SortByUpper = UPPER(ISNULL(@SortBy, 'SCORE'))
-IF @SortByUpper NOT IN ('SCORE', 'SIZE', 'SCANS', 'UPDATES', 'IMPACT', 'OBJECT')
+IF @SortByUpper NOT IN ('SCORE', 'SIZE', 'SCANS', 'UPDATES', 'IMPACT', 'OBJECT', 'ROWS')
     SET @SortByUpper = 'SCORE'
+
+SET @ScanModeUpper = UPPER(LTRIM(RTRIM(ISNULL(@ScanMode, 'LIMITED'))))
+IF @ScanModeUpper NOT IN ('LIMITED', 'SAMPLED', 'DETAILED')
+    SET @ScanModeUpper = 'LIMITED'
 
 SET @MajorVersion = CONVERT(tinyint,
     LEFT(CAST(SERVERPROPERTY('ProductVersion') AS varchar(30)),
@@ -199,16 +210,26 @@ SET @Sql = N'
               AND __CLUSTERED_FILTER__
        )
 ),
+HeapRowCounts AS
+(
+    SELECT
+        p.object_id,
+        RecordCount = SUM(CAST(p.rows AS bigint))
+      FROM __TARGET_DB__.sys.partitions AS p
+     INNER JOIN HeapTables AS ht
+        ON ht.ObjectID = p.object_id
+     WHERE p.index_id = 0
+     GROUP BY p.object_id
+),
 HeapPhysical AS
 (
     SELECT
         ips.object_id,
-        RecordCount = SUM(ips.record_count),
         PageCount = SUM(ips.page_count),
         SizeMB = SUM(ips.page_count) * 8.0 / 1024.0,
         ForwardedRecordCount = SUM(ISNULL(ips.forwarded_record_count, 0)),
         AvgFragmentationPct = MAX(ips.avg_fragmentation_in_percent)
-      FROM __TARGET_DB__.sys.dm_db_index_physical_stats(@TargetDatabaseId, NULL, NULL, NULL, ''LIMITED'') AS ips
+      FROM __TARGET_DB__.sys.dm_db_index_physical_stats(@TargetDatabaseId, NULL, NULL, NULL, @ScanMode) AS ips
      INNER JOIN HeapTables AS ht
         ON ht.ObjectID = ips.object_id
      WHERE ips.index_id = 0
@@ -391,7 +412,7 @@ Prepared AS
         ht.SchemaName,
         ht.TableName,
         ht.ObjectID,
-        RecordCount = ISNULL(hp.RecordCount, 0),
+        RecordCount = ISNULL(hr.RecordCount, 0),
         PageCount = ISNULL(hp.PageCount, 0),
         SizeMB = ISNULL(hp.SizeMB, 0),
         HeapSeeks = ISNULL(hu.HeapSeeks, 0),
@@ -426,6 +447,8 @@ Prepared AS
       FROM HeapTables AS ht
       LEFT JOIN HeapPhysical AS hp
         ON hp.object_id = ht.ObjectID
+      LEFT JOIN HeapRowCounts AS hr
+        ON hr.object_id = ht.ObjectID
       LEFT JOIN HeapUsage AS hu
         ON hu.object_id = ht.ObjectID
       LEFT JOIN NcIndexCounts AS nc
@@ -510,6 +533,7 @@ INSERT INTO #HeapAnalysis
 SELECT
     SortKey = CASE @SortByUpper
                   WHEN ''SIZE'' THEN CAST(s.SizeMB AS decimal(18, 4))
+                  WHEN ''ROWS'' THEN CAST(s.RecordCount AS decimal(18, 4))
                   WHEN ''SCANS'' THEN CAST(s.HeapScans AS decimal(18, 4))
                   WHEN ''UPDATES'' THEN CAST(s.HeapUpdates AS decimal(18, 4))
                   WHEN ''IMPACT'' THEN ISNULL(s.MissingIndexImpact, 0)
@@ -604,6 +628,7 @@ EXEC sys.sp_executesql
       @TableFilter sysname,
       @MinPageCount int,
       @SortByUpper varchar(10),
+      @ScanMode varchar(10),
       @IndexWithOptions nvarchar(200),
       @IndexWithOptionsNC nvarchar(200)',
     @TargetDatabaseId = @TargetDatabaseId,
@@ -611,6 +636,7 @@ EXEC sys.sp_executesql
     @TableFilter = @TableFilter,
     @MinPageCount = @MinPageCount,
     @SortByUpper = @SortByUpper,
+    @ScanMode = @ScanModeUpper,
     @IndexWithOptions = @IndexWithOptions,
     @IndexWithOptionsNC = @IndexWithOptionsNC
 
@@ -632,6 +658,7 @@ BEGIN
         MinPageCount = @MinPageCount,
         TopN = @TopN,
         SortBy = @SortByUpper,
+        ScanMode = @ScanModeUpper,
         SqlMajorVersion = @MajorVersion,
         CompatibilityLevel = @CompatibilityLevel,
         IndexWithOptions = @IndexWithOptions,

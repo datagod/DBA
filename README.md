@@ -197,6 +197,7 @@ EXEC dbo.CheckForHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'ROWS';
 
 -- Full analysis with DDL suggestions
 EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'SCORE';
+EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @ScanMode = 'SAMPLED';
 
 -- One table — prefer single ascending identity clustering key
 EXEC dbo.RecommendClusteredIndex
