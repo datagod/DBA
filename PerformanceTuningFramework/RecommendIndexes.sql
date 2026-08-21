@@ -19,6 +19,13 @@
     @ReturnResultSets      - return summary, analysis, and recommendation result sets (default 1)
 
   The recommendations result set includes RecordCount (estimated rows in the index at capture time).
+
+  DROP_DUPLICATE / DROP_REDUNDANT compare nonclustered, non-unique, non-PK indexes
+  on the same table and the same filter (or both unfiltered). Exact key + include
+  match is DROP_DUPLICATE. A left-prefix key, or the same key with a proper include
+  subset, is DROP_REDUNDANT when the inferior includes are covered by the superior
+  keys and includes. Unique and clustered indexes are never drop candidates here.
+  The kept index is the one with more reads, then larger size, then lower IndexID.
 */
 
 SET ANSI_NULLS ON
@@ -45,6 +52,8 @@ AS
 -- Author:       Bill McEvoy
 -- Description:  Analyzes the latest IndexAnalysis capture for a target database, summarizes index
 --               health findings, and returns prioritized index recommendations with actionable DDL.
+--               Duplicate and redundant nonclustered indexes are ranked by usage, size, and key /
+--               include / filter overlap. Unique and clustered indexes are not drop candidates.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -167,10 +176,13 @@ CREATE TABLE #CapturedIndexes
     IsFiltered           bit             NOT NULL,
     IsUnique             bit             NOT NULL,
     IsPrimaryKey         bit             NOT NULL,
-    KeyColumns           nvarchar(2000)  NULL,
-    IncludedColumns      nvarchar(2000)  NULL,
-    NormalizedKeyColumns nvarchar(2000)  NULL,
-    ObjectDisplay        nvarchar(400)   NOT NULL
+    KeyColumns            nvarchar(2000)  NULL,
+    IncludedColumns       nvarchar(2000)  NULL,
+    FilterDefinition      nvarchar(max)   NULL,
+    NormalizedKeyColumns  nvarchar(2000)  NULL,
+    NormalizedIncludeSet  nvarchar(2000)  NULL,
+    NormalizedFilter      nvarchar(max)   NULL,
+    ObjectDisplay         nvarchar(400)   NOT NULL
 )
 
 INSERT INTO #CapturedIndexes
@@ -196,7 +208,10 @@ INSERT INTO #CapturedIndexes
     IsPrimaryKey,
     KeyColumns,
     IncludedColumns,
+    FilterDefinition,
     NormalizedKeyColumns,
+    NormalizedIncludeSet,
+    NormalizedFilter,
     ObjectDisplay
 )
 SELECT
@@ -221,7 +236,10 @@ SELECT
     ia.IsPrimaryKey,
     ia.KeyColumns,
     ia.IncludedColumns,
+    ia.FilterDefinition,
     NormalizedKeyColumns = LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(ISNULL(ia.KeyColumns, N''), N'[', N''), N']', N''), N' ASC', N''), N' DESC', N''), N' ', N'')),
+    NormalizedIncludeSet = NULL,
+    NormalizedFilter = LOWER(LTRIM(RTRIM(ISNULL(ia.FilterDefinition, N'')))),
     ObjectDisplay = ia.SchemaName + N'.' + ia.TableName
                   + N' [' + CASE
                                 WHEN ia.IndexID = 0 THEN N'HEAP'
@@ -240,6 +258,28 @@ BEGIN
     RAISERROR('No IndexAnalysis rows found for run %s in database ''%s'' with the current filters.', 16, 1, @AnalysisRunIDText, @TargetDatabase)
     RETURN
 END
+
+UPDATE ci
+   SET NormalizedIncludeSet = ISNULL(sorted.IncludeSet, N'')
+  FROM #CapturedIndexes AS ci
+ OUTER APPLY
+ (
+    SELECT IncludeSet = STUFF((
+        SELECT N',' + d.Col
+          FROM (
+                SELECT CAST(N'<i>' + REPLACE(
+                           LOWER(REPLACE(REPLACE(ISNULL(ci.IncludedColumns, N''), N'[', N''), N']', N'')),
+                           N',',
+                           N'</i><i>'
+                       ) + N'</i>' AS xml) AS x
+               ) AS t
+         CROSS APPLY t.x.nodes('/i') AS n(c)
+         CROSS APPLY (SELECT Col = LTRIM(RTRIM(n.c.value(N'.', N'nvarchar(128)')))) AS d
+         WHERE d.Col <> N''
+         ORDER BY d.Col
+           FOR XML PATH(N''), TYPE
+    ).value(N'.', N'nvarchar(2000)'), 1, 1, N'')
+ ) AS sorted
 
 SELECT
     @TotalIndexes    = COUNT(*),
@@ -466,8 +506,109 @@ SELECT
    AND ci.SizeMB >= @MinSizeMB
 
 ----------------------------------------------------------------------------------------------------
--- Redundant / duplicate nonclustered indexes (prefix or exact key overlap)
+-- Redundant / duplicate nonclustered indexes (keys, includes, and filter)
 ----------------------------------------------------------------------------------------------------
+;WITH Eligible AS
+(
+    SELECT
+        ci.SchemaName,
+        ci.TableName,
+        ci.IndexName,
+        ci.ObjectID,
+        ci.IndexID,
+        ci.KeyColumns,
+        ci.IncludedColumns,
+        ci.FilterDefinition,
+        ci.NormalizedKeyColumns,
+        ci.NormalizedIncludeSet,
+        ci.NormalizedFilter,
+        ci.TotalReads,
+        ci.UserUpdates,
+        ci.SizeMB,
+        ci.RecordCount,
+        ci.ObjectDisplay,
+        CoverSet = N',' + ISNULL(ci.NormalizedKeyColumns, N'')
+                 + CASE
+                       WHEN NULLIF(ci.NormalizedIncludeSet, N'') IS NOT NULL
+                           THEN N',' + ci.NormalizedIncludeSet
+                       ELSE N''
+                   END
+                 + N','
+      FROM #CapturedIndexes AS ci
+     WHERE ci.IndexID > 0
+       AND ci.IndexTypeDesc = 'NONCLUSTERED'
+       AND ci.IsPrimaryKey = 0
+       AND ci.IsUnique = 0
+       AND ci.IsDisabled = 0
+       AND ci.IndexName IS NOT NULL
+       AND NULLIF(ci.NormalizedKeyColumns, N'') IS NOT NULL
+),
+Pairs AS
+(
+    SELECT
+        inferior.SchemaName,
+        inferior.TableName,
+        inferior.IndexName,
+        inferior.ObjectDisplay,
+        inferior.KeyColumns,
+        inferior.IncludedColumns,
+        inferior.FilterDefinition,
+        inferior.NormalizedKeyColumns,
+        inferior.NormalizedIncludeSet,
+        inferior.TotalReads,
+        inferior.UserUpdates,
+        inferior.SizeMB,
+        inferior.RecordCount,
+        SuperiorDisplay = superior.ObjectDisplay,
+        SuperiorKeyColumns = superior.KeyColumns,
+        SuperiorIncludedColumns = superior.IncludedColumns,
+        SuperiorNormalizedKeyColumns = superior.NormalizedKeyColumns,
+        SuperiorTotalReads = superior.TotalReads,
+        MatchKind = CASE
+                        WHEN inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns
+                         AND ISNULL(inferior.NormalizedIncludeSet, N'') = ISNULL(superior.NormalizedIncludeSet, N'')
+                            THEN 'DUPLICATE'
+                        ELSE 'REDUNDANT'
+                    END,
+        SuperiorRank = ROW_NUMBER() OVER (
+            PARTITION BY inferior.ObjectID, inferior.IndexID
+            ORDER BY superior.TotalReads DESC, superior.SizeMB DESC, superior.IndexID
+        )
+      FROM Eligible AS inferior
+     INNER JOIN Eligible AS superior
+        ON superior.ObjectID = inferior.ObjectID
+       AND superior.IndexID <> inferior.IndexID
+     WHERE ISNULL(inferior.NormalizedFilter, N'') = ISNULL(superior.NormalizedFilter, N'')
+       AND (
+               inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns
+            OR superior.NormalizedKeyColumns LIKE inferior.NormalizedKeyColumns + N',%'
+           )
+       AND (
+               inferior.TotalReads < superior.TotalReads
+            OR (
+                   inferior.TotalReads = superior.TotalReads
+               AND inferior.SizeMB < superior.SizeMB
+               )
+            OR (
+                   inferior.TotalReads = superior.TotalReads
+               AND inferior.SizeMB = superior.SizeMB
+               AND inferior.IndexID > superior.IndexID
+               )
+           )
+       AND NOT EXISTS (
+               SELECT 1
+                 FROM (
+                        SELECT CAST(
+                                   N'<i>' + REPLACE(ISNULL(inferior.NormalizedIncludeSet, N''), N',', N'</i><i>') + N'</i>'
+                                   AS xml
+                               ) AS x
+                      ) AS t
+                CROSS APPLY t.x.nodes('/i') AS n(c)
+                CROSS APPLY (SELECT Col = LTRIM(RTRIM(n.c.value(N'.', N'nvarchar(128)')))) AS d
+                WHERE d.Col <> N''
+                  AND superior.CoverSet NOT LIKE N'%,' + d.Col + N',%'
+           )
+)
 INSERT INTO #Recommendations
 (
     PriorityScore,
@@ -486,63 +627,37 @@ INSERT INTO #Recommendations
 )
 SELECT
     PriorityScore = CAST(
-        CASE
-            WHEN inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns THEN 30
-            ELSE 22
-        END
-        + CASE WHEN inferior.SizeMB >= 100 THEN 10 WHEN inferior.SizeMB >= 10 THEN 5 ELSE 0 END
+        CASE WHEN p.MatchKind = 'DUPLICATE' THEN 30 ELSE 22 END
+        + CASE WHEN p.SizeMB >= 100 THEN 10 WHEN p.SizeMB >= 10 THEN 5 ELSE 0 END
     AS int),
-    Severity = CASE
-                   WHEN inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns THEN 3
-                   ELSE 2
-               END,
-    RecommendationType = CASE
-                             WHEN inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns THEN 'DROP_DUPLICATE'
-                             ELSE 'DROP_REDUNDANT'
-                         END,
-    inferior.SchemaName,
-    inferior.TableName,
-    inferior.IndexName,
-    inferior.ObjectDisplay,
-    RelatedObject = superior.ObjectDisplay,
+    Severity = CASE WHEN p.MatchKind = 'DUPLICATE' THEN 3 ELSE 2 END,
+    RecommendationType = CASE WHEN p.MatchKind = 'DUPLICATE' THEN 'DROP_DUPLICATE' ELSE 'DROP_REDUNDANT' END,
+    p.SchemaName,
+    p.TableName,
+    p.IndexName,
+    p.ObjectDisplay,
+    RelatedObject = p.SuperiorDisplay,
     FindingDetail = CASE
-                        WHEN inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns
-                            THEN N'Exact duplicate key columns with inferior read activity.'
+                        WHEN p.MatchKind = 'DUPLICATE'
+                            THEN N'Exact duplicate keys and includes with inferior read activity.'
+                        WHEN p.NormalizedKeyColumns = p.SuperiorNormalizedKeyColumns
+                            THEN N'Same key columns; inferior includes are covered by the better-used index.'
                         ELSE N'Key columns are a left-prefix of a broader index with equal or better read activity.'
                     END
-                  + N' Inferior reads=' + CAST(inferior.TotalReads AS nvarchar(20))
-                  + N', Superior reads=' + CAST(superior.TotalReads AS nvarchar(20))
-                  + N', Inferior key=' + ISNULL(inferior.KeyColumns, N'(none)')
-                  + N', Superior key=' + ISNULL(superior.KeyColumns, N'(none)'),
-    Rationale = N'SQL Server can satisfy the inferior index access paths using the broader or better-used index, reducing storage and DML overhead.',
-    SuggestedDdl = N'DROP INDEX ' + QUOTENAME(inferior.IndexName) + N' ON '
-                 + QUOTENAME(inferior.SchemaName) + N'.' + QUOTENAME(inferior.TableName) + N';',
-    MetricNumeric = CAST(inferior.UserUpdates AS decimal(18, 4)),
-    inferior.RecordCount
-  FROM #CapturedIndexes AS inferior
- INNER JOIN #CapturedIndexes AS superior
-    ON superior.ObjectID = inferior.ObjectID
-   AND superior.IndexID <> inferior.IndexID
- WHERE inferior.IndexID > 0
-   AND superior.IndexID > 0
-   AND inferior.IndexTypeDesc = 'NONCLUSTERED'
-   AND superior.IndexTypeDesc = 'NONCLUSTERED'
-   AND inferior.IsPrimaryKey = 0
-   AND superior.IsPrimaryKey = 0
-   AND inferior.IsUnique = 0
-   AND superior.IsUnique = 0
-   AND inferior.IsDisabled = 0
-   AND superior.IsDisabled = 0
-   AND inferior.IndexName IS NOT NULL
-   AND superior.IndexName IS NOT NULL
-   AND NULLIF(inferior.NormalizedKeyColumns, N'') IS NOT NULL
-   AND NULLIF(superior.NormalizedKeyColumns, N'') IS NOT NULL
-   AND (
-           inferior.NormalizedKeyColumns = superior.NormalizedKeyColumns
-        OR superior.NormalizedKeyColumns LIKE inferior.NormalizedKeyColumns + N',%'
-       )
-   AND inferior.TotalReads <= superior.TotalReads
-   AND inferior.IndexID < superior.IndexID
+                  + N' Inferior reads=' + CAST(p.TotalReads AS nvarchar(20))
+                  + N', Superior reads=' + CAST(p.SuperiorTotalReads AS nvarchar(20))
+                  + N', Inferior key=' + ISNULL(p.KeyColumns, N'(none)')
+                  + N', Superior key=' + ISNULL(p.SuperiorKeyColumns, N'(none)')
+                  + N', Inferior includes=' + ISNULL(p.IncludedColumns, N'(none)')
+                  + N', Superior includes=' + ISNULL(p.SuperiorIncludedColumns, N'(none)')
+                  + N', Filter=' + ISNULL(NULLIF(p.FilterDefinition, N''), N'(none)'),
+    Rationale = N'SQL Server can satisfy the inferior index access paths using the broader or better-used index, reducing storage and DML overhead. Unique and clustered indexes are left in place.',
+    SuggestedDdl = N'DROP INDEX ' + QUOTENAME(p.IndexName) + N' ON '
+                 + QUOTENAME(p.SchemaName) + N'.' + QUOTENAME(p.TableName) + N';',
+    MetricNumeric = CAST(p.UserUpdates AS decimal(18, 4)),
+    p.RecordCount
+  FROM Pairs AS p
+ WHERE p.SuperiorRank = 1
 
 ----------------------------------------------------------------------------------------------------
 -- Active heaps: recommend clustered indexes from capture signals

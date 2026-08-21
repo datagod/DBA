@@ -166,7 +166,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `ShowQueryStoreWorkloadReport` | `ShowQueryStoreWorkloadReport.sql` | Instance-wide Query Store workload scan |
 | `QueryStoreStatus` | `QueryStoreStatus.sql` | Instance-wide Query Store configuration inventory |
 | `QueryStorePerformanceAnalysis` | `QueryStorePerformanceAnalysis.sql` | Query Store top queries and recent regressions (current DB) |
-| `RecommendIndexes` | `RecommendIndexes.sql` | Prioritized index recommendations from IndexAnalysis |
+| `RecommendIndexes` | `RecommendIndexes.sql` | Prioritized index recommendations from IndexAnalysis, including duplicate and redundant nonclustered drops |
 | `SearchQueryStoreForObject` | `SearchQueryStoreForObject.sql` | Find Query Store queries for an object name |
 | `StartPerformanceTrace` | `StartPerformanceTrace.sql` | Start a filtered server-side trace |
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
