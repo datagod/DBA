@@ -1,4 +1,3 @@
-use dbatools
 /*
   AnalyzeIndexes.sql
   Performance Tuning Framework
