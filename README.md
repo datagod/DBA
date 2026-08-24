@@ -95,6 +95,7 @@ GO
 :r PerformanceTuningFramework\ExamineDatabasePerformance.sql
 :r PerformanceTuningFramework\CheckForHeaps.sql
 :r PerformanceTuningFramework\ShowHeaps.sql
+:r PerformanceTuningFramework\ShowBackupHealth.sql
 :r PerformanceTuningFramework\RecommendClusteredIndex.sql
 ```
 
@@ -172,6 +173,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
+| `ShowBackupHealth` | `ShowBackupHealth.sql` | Instance backup-health diagnostic: in-progress backups, last FULL/DIFF/LOG per database, backup jobs, and ranked findings |
 | `ShowAgentJobReport` | `ShowAgentJobReport.sql` | SQL Agent job/schedule/step inventory (Markdown default, TEXT optional) |
 
 ### Common workflows
@@ -223,6 +225,13 @@ EXEC dbo.ExamineQueryStore @TargetDatabase = N'YourDatabase', @DaysBack = 7;
 
 -- Compact text report
 EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase', @SortBy = 'CPU';
+```
+
+**Backup health**
+
+```sql
+EXEC dbo.ShowBackupHealth;
+EXEC dbo.ShowBackupHealth @LongRunningMinutes = 30, @FullMaxHours = 24;
 ```
 
 **SQL Agent job inventory**
