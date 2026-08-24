@@ -485,6 +485,65 @@ Parameters:
 - `@MaxFileSizeMB` — rollover size in MB (default `100`)
 - `@TraceControlID` — OUTPUT control row identifier
 
+### ShowBackupHealth
+
+File: `ShowBackupHealth.sql`
+
+Stored procedure that examines **instance backup health** and returns ranked problems with suggested actions. Complements `Procedures/ShowBackups.sql` (history report) and `Procedures/ShowBackupsInProgress` (raw `dm_exec_requests` dump). Requires SQL Server 2012 (11.x) or later. Does not persist results to a table.
+
+- Reports every in-progress request whose command contains `BACKUP`, including elapsed time, `percent_complete`, waits, SQL Agent job name (from `program_name` hex), and command text
+- Reports last non-copy-only FULL, last DIFF, last LOG, and last copy-only FULL per filtered database from `msdb.dbo.backupset` / `backupmediafamily`
+- Lists Agent jobs whose step command contains `BACKUP`, with last run, current run, and next run
+- Ranks findings: long-running or stalled backups, stale differential bases, missing FULL/DIFF/LOG coverage, copy-only-only fulls, slow throughput, and backup-job failures
+- Interprets waits (`BACKUPIO` / `ASYNC_IO_COMPLETION` = destination; `BACKUPBUFFER` / `BACKUPTHREAD` = buffers/CPU; `LCK_*` = blocking; `PREEMPTIVE_OS_*` = OS/network)
+- Does not recommend `KILL` while `percent_complete` is advancing; a stalled 0% backup can be killed and replaced with a FULL (the in-flight backup is not usable)
+
+Deployment:
+
+```sql
+-- Run ShowBackupHealth.sql in the tool database
+EXEC dbo.ShowBackupHealth
+EXEC dbo.ShowBackupHealth @LongRunningMinutes = 30, @FullMaxHours = 24
+EXEC dbo.ShowBackupHealth @DatabaseFilter = N'YourDatabase%', @IncludeSystem = 0
+```
+
+Parameters:
+
+- `@DatabaseFilter` — database name filter, supports LIKE patterns (default `%`)
+- `@FullMaxHours` — maximum age of a non-copy-only FULL before it is stale (default `36`)
+- `@DiffMaxHours` — maximum age of a DIFF when the database actually uses differentials (default `36`)
+- `@LogMaxMinutes` — maximum age of a LOG backup for FULL/BULK_LOGGED databases (default `60`)
+- `@LongRunningMinutes` — in-progress backup or backup job duration that is considered long (default `60`)
+- `@HistoryDays` — lookback for job failures, DIFF usage, and instance throughput averages (default `14`)
+- `@IncludeSystem` — `1` = include `master`/`model`/`msdb` (`tempdb` is always skipped) (default `0`)
+- `@ReturnResultSets` — return the five result sets (default `1`)
+
+Result sets:
+
+1. Summary (capture time, server, running backup count, high-priority finding count, parameters)
+2. InProgress
+3. LastBackupByDatabase
+4. BackupJobs
+5. Findings
+
+Finding types:
+
+| Type | Meaning |
+|------|---------|
+| `BACKUP_RUNNING_LONG` | In-progress backup older than `@LongRunningMinutes` (severity 3 if >= 4 hours or 3x historical average) |
+| `BACKUP_STALLED` | In-progress backup at 0% for 30+ minutes, or destination/OS wait with almost no progress |
+| `DIFF_BASE_STALE` | A DIFF is running or exists, but the last real FULL is older than `@FullMaxHours` |
+| `DIFF_SLOWER_THAN_FULL` | Last completed DIFF took longer than the last completed FULL |
+| `NO_RECENT_FULL` | Online database has no non-copy-only FULL within `@FullMaxHours` |
+| `NO_RECENT_DIFF` | Database has DIFF history in `@HistoryDays` but the last DIFF is older than `@DiffMaxHours` |
+| `NO_RECENT_LOG` | FULL/BULK_LOGGED online database has no LOG backup within `@LogMaxMinutes` (skipped when there is no real FULL / log chain) |
+| `BACKUP_JOB_RUNNING_LONG` | Backup-related Agent job running longer than `@LongRunningMinutes` |
+| `BACKUP_JOB_FAILED` | Last backup-job outcome failed within `@HistoryDays` |
+| `SLOW_THROUGHPUT` | Last completed backup of a type is under 25% of the instance average and lasted over 15 minutes |
+| `COPY_ONLY_ONLY` | Latest FULL is copy-only and there is no recent real FULL |
+
+Note: Last-backup times use a 400-day `backupset` lookback so an old FULL still appears as a date rather than as missing. Negative thresholds are converted with `ABS` (zero falls back to the default). Review Findings first; compression, striping, `BUFFERCOUNT`, and `MAXTRANSFERSIZE` are next-run tuning, not the first step on a 24-hour DIFF.
+
 ### ShowAgentJobReport
 
 File: `ShowAgentJobReport.sql`
