@@ -1,4 +1,3 @@
-use dbatools
 /*
   ExamineDatabasePerformance.sql
   Performance Tuning Framework
@@ -975,4 +974,3 @@ END
 GO
 
 
-dbo.ExamineDatabasePerformance @TargetDatabase='nova_datamart'
