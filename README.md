@@ -160,7 +160,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `CompareDatabasePerformance` | `CompareDatabasePerformance.sql` | Compare two exam runs side-by-side |
 | `CheckForHeaps` | `CheckForHeaps.sql` | Fast catalog-only heap scan |
 | `ShowHeaps` | `ShowHeaps.sql` | Full heap DMV analysis with clustered-index DDL |
-| `RecommendClusteredIndex` | `RecommendClusteredIndex.sql` | Single-table clustered index recommendation; prefers a single integer column over compound keys; `@SuggestNewColumns` default `no` uses existing columns only |
+| `RecommendClusteredIndex` | `RecommendClusteredIndex.sql` | Single-table clustered index recommendation with uniqueness and Justification; identity/PK/missing-index/NC paths; `@SuggestNewColumns` default `no` uses existing columns only |
 | `ShowTableInfo` | `ShowTableInfo.sql` | Single-table size, indexes, fragmentation, columns, constraints, stats |
 | `ExamineQueryStore` | `ExamineQueryStore.sql` | Deep Query Store analysis with prioritized findings |
 | `ShowQueryStoreReport` | `ShowQueryStoreReport.sql` | Query Store report for one database |
@@ -201,7 +201,7 @@ EXEC dbo.CheckForHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'ROWS';
 EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @SortBy = 'SCORE';
 EXEC dbo.ShowHeaps @TargetDatabase = N'YourDatabase', @ScanMode = 'SAMPLED';
 
--- One table — prefer single ascending identity clustering key
+-- One table — clustered index recommendation with uniqueness and justification
 EXEC dbo.RecommendClusteredIndex
      @TargetDatabase = N'YourDatabase',
      @SchemaName     = N'dbo',
