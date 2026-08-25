@@ -268,10 +268,10 @@ IF OBJECT_ID('tempdb..#WaitAgg') IS NOT NULL
 
 CREATE TABLE #WaitAgg
 (
-    WaitCategory        nvarchar(60)  NOT NULL,
-    TotalQueryWaitMs    float         NOT NULL,
-    TotalExecutionCount bigint        NOT NULL,
-    AvgQueryWaitMs      float         NOT NULL
+    WaitCategory            nvarchar(60)  NOT NULL,
+    TotalQueryWaitSeconds   float         NOT NULL,
+    TotalExecutionCount     bigint        NOT NULL,
+    AvgQueryWaitSeconds     float         NOT NULL
 )
 
 /* Informational: lower target compatibility does not block Query Store analysis */
@@ -743,12 +743,13 @@ EXEC sys.sp_executesql
 IF @MajorVersion >= 14 AND ISNULL(@WaitStatsCaptureMode, N'') <> N'OFF'
 BEGIN
     SET @Sql = N'
-    INSERT INTO #WaitAgg (WaitCategory, TotalQueryWaitMs, TotalExecutionCount, AvgQueryWaitMs)
+    INSERT INTO #WaitAgg (WaitCategory, TotalQueryWaitSeconds, TotalExecutionCount, AvgQueryWaitSeconds)
     SELECT
         WaitCategory = ws.wait_category_desc,
-        TotalQueryWaitMs = SUM(CONVERT(float, ws.total_query_wait_time_ms)),
+        /* catalog wait times are milliseconds; store seconds for display */
+        TotalQueryWaitSeconds = SUM(CONVERT(float, ws.total_query_wait_time_ms)) / 1000.0,
         TotalExecutionCount = COUNT_BIG(*),
-        AvgQueryWaitMs = AVG(CONVERT(float, ws.avg_query_wait_time_ms))
+        AvgQueryWaitSeconds = AVG(CONVERT(float, ws.avg_query_wait_time_ms)) / 1000.0
     FROM ' + @QuotedDatabase + N'.sys.query_store_wait_stats AS ws
     INNER JOIN ' + @QuotedDatabase + N'.sys.query_store_runtime_stats_interval AS rsi
         ON rsi.runtime_stats_interval_id = ws.runtime_stats_interval_id
@@ -850,14 +851,14 @@ SELECT TOP (@TopN)
                ELSE N'0'
           END
         + N'%. Execs=' + CAST(q.Executions AS nvarchar(20))
-        + N', AvgCPU=' + CAST(CAST(q.AvgCpuUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms'
-        + N', MaxCPU=' + CAST(CAST(ISNULL(q.MaxCpuUs, 0) / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms'
+        + N', AvgCPU=' + CAST(CAST(q.AvgCpuUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
+        + N', MaxCPU=' + CAST(CAST(ISNULL(q.MaxCpuUs, 0) / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
         + N', Plans=' + CAST(q.PlanCount AS nvarchar(10))
         + N', LastExec=' + ISNULL(CONVERT(nvarchar(19), q.LastExecutionTime, 120), N'n/a') + N'.',
     SuggestedAction = N'Review plan(s) for query_id=' + CAST(q.QueryID AS nvarchar(20))
         + N'. Check for missing indexes, implicit conversions, large scans, and parameter sniffing. Use SET STATISTICS IO/TIME or actual plans in a non-prod window.',
-    MetricNumeric = CAST(q.TotalCpuUs / 1000.0 AS decimal(28, 4)),
-    MetricLabel = 'TotalCpuMs',
+    MetricNumeric = CAST(q.TotalCpuUs / 1000000.0 AS decimal(28, 4)),
+    MetricLabel = 'TotalCpuSeconds',
     QueryTextShort = CASE WHEN @IncludeQueryText = 1 THEN q.QueryTextShort ELSE NULL END
   FROM #QueryAgg AS q
  CROSS JOIN Totals AS t
@@ -902,13 +903,13 @@ SELECT TOP (@TopN)
                ELSE N'0'
           END
         + N'%. Execs=' + CAST(q.Executions AS nvarchar(20))
-        + N', AvgDuration=' + CAST(CAST(q.AvgDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms'
-        + N', MaxDuration=' + CAST(CAST(ISNULL(q.MaxDurationUs, 0) / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms'
+        + N', AvgDuration=' + CAST(CAST(q.AvgDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
+        + N', MaxDuration=' + CAST(CAST(ISNULL(q.MaxDurationUs, 0) / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
         + N', AvgReads=' + CAST(CAST(q.AvgLogicalReads AS decimal(18, 1)) AS nvarchar(20)) + N'.',
     SuggestedAction = N'Investigate blocking, waits, and plan quality for query_id=' + CAST(q.QueryID AS nvarchar(20))
         + N'. Compare Avg vs Max duration for intermittent regressions.',
-    MetricNumeric = CAST(q.TotalDurationUs / 1000.0 AS decimal(28, 4)),
-    MetricLabel = 'TotalDurationMs',
+    MetricNumeric = CAST(q.TotalDurationUs / 1000000.0 AS decimal(28, 4)),
+    MetricLabel = 'TotalDurationSeconds',
     QueryTextShort = CASE WHEN @IncludeQueryText = 1 THEN q.QueryTextShort ELSE NULL END
   FROM #QueryAgg AS q
  CROSS JOIN Totals AS t
@@ -1058,9 +1059,9 @@ SELECT TOP (@TopN)
     FindingDetail = N'Query has ' + CAST(pr.PlanCount AS nvarchar(10)) + N' plans in the window with avg-duration ratio '
         + CAST(CAST(pr.VarianceFactor AS decimal(18, 2)) AS nvarchar(20))
         + N'x (best plan_id=' + CAST(pr.BestPlanID AS nvarchar(20))
-        + N' @ ' + CAST(CAST(pr.MinAvgDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms avg; worst plan_id='
+        + N' @ ' + CAST(CAST(pr.MinAvgDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec avg; worst plan_id='
         + CAST(pr.WorstPlanID AS nvarchar(20))
-        + N' @ ' + CAST(CAST(pr.MaxAvgDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms avg). Execs='
+        + N' @ ' + CAST(CAST(pr.MaxAvgDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec avg). Execs='
         + CAST(pr.TotalExecutions AS nvarchar(20)) + N'.',
     SuggestedAction = N'Suspect parameter sniffing or schema/stats change. Compare plans, consider Query Store plan forcing of the good plan after validation, OPTIMIZE FOR / recompile strategies, or stats/index fixes for query_id='
         + CAST(q.QueryID AS nvarchar(20)) + N'.',
@@ -1100,9 +1101,9 @@ SELECT TOP (@TopN)
     PlanID = NULL,
     FindingDetail = N'Max/Avg duration ratio='
         + CAST(CAST(q.MaxDurationUs / NULLIF(q.AvgDurationUs, 0) AS decimal(18, 2)) AS nvarchar(20))
-        + N'x. Avg=' + CAST(CAST(q.AvgDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20))
-        + N' ms, Max=' + CAST(CAST(q.MaxDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20))
-        + N' ms, Execs=' + CAST(q.Executions AS nvarchar(20))
+        + N'x. Avg=' + CAST(CAST(q.AvgDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20))
+        + N' sec, Max=' + CAST(CAST(q.MaxDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20))
+        + N' sec, Execs=' + CAST(q.Executions AS nvarchar(20))
         + N', Plans=' + CAST(q.PlanCount AS nvarchar(10)) + N'.',
     SuggestedAction = N'Intermittent spikes can be blocking, resource contention, or a rare bad plan. Inspect runtime intervals and waits around last_execution_time for query_id='
         + CAST(q.QueryID AS nvarchar(20)) + N'.',
@@ -1113,7 +1114,7 @@ SELECT TOP (@TopN)
  WHERE q.Executions >= @MinExecutions
    AND q.AvgDurationUs > 0
    AND q.MaxDurationUs >= q.AvgDurationUs * @OutlierFactor
-   AND q.MaxDurationUs >= 500000  -- at least 500 ms max to avoid noise
+   AND q.MaxDurationUs >= 500000  -- at least 0.50 seconds max to avoid noise
  ORDER BY q.MaxDurationUs / NULLIF(q.AvgDurationUs, 0) DESC
 
 ---------------------------------------------------------------------------------------------------
@@ -1161,7 +1162,7 @@ SELECT TOP (@TopN)
     PlanID = NULL,
     FindingDetail = N'Query currently has a forced plan (ForcedPlanCount='
         + CAST(q.ForcedPlanCount AS nvarchar(10)) + N'). Execs=' + CAST(q.Executions AS nvarchar(20))
-        + N', AvgDuration=' + CAST(CAST(q.AvgDurationUs / 1000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' ms.',
+        + N', AvgDuration=' + CAST(CAST(q.AvgDurationUs / 1000000.0 AS decimal(18, 2)) AS nvarchar(20)) + N' sec.',
     SuggestedAction = N'Keep forced plans under change control. Periodically re-validate that the forced plan remains optimal after schema/stats changes.',
     MetricNumeric = CAST(q.ForcedPlanCount AS decimal(28, 4)),
     MetricLabel = 'ForcedPlanCount',
@@ -1270,17 +1271,17 @@ INSERT INTO #Findings
 )
 SELECT TOP (@TopN)
     PriorityScore = 600
-        + CASE WHEN w.TotalQueryWaitMs >= 600000 THEN 50 WHEN w.TotalQueryWaitMs >= 60000 THEN 25 ELSE 5 END,
+        + CASE WHEN w.TotalQueryWaitSeconds >= 600 THEN 50 WHEN w.TotalQueryWaitSeconds >= 60 THEN 25 ELSE 5 END,
     Severity = CASE
                    WHEN w.WaitCategory IN (N'Lock', N'Latch', N'Buffer IO', N'Buffer Latch', N'Parallelism')
-                        AND w.TotalQueryWaitMs >= 60000 THEN 2
-                   WHEN w.TotalQueryWaitMs >= 600000 THEN 2
+                        AND w.TotalQueryWaitSeconds >= 60 THEN 2
+                   WHEN w.TotalQueryWaitSeconds >= 600 THEN 2
                    ELSE 1
                END,
     SeverityLabel = CASE
                         WHEN w.WaitCategory IN (N'Lock', N'Latch', N'Buffer IO', N'Buffer Latch', N'Parallelism')
-                             AND w.TotalQueryWaitMs >= 60000 THEN 'Warning'
-                        WHEN w.TotalQueryWaitMs >= 600000 THEN 'Warning'
+                             AND w.TotalQueryWaitSeconds >= 60 THEN 'Warning'
+                        WHEN w.TotalQueryWaitSeconds >= 600 THEN 'Warning'
                         ELSE 'Info'
                     END,
     Category = 'WAIT_CATEGORY',
@@ -1288,8 +1289,8 @@ SELECT TOP (@TopN)
     QueryID = NULL,
     PlanID = NULL,
     FindingDetail = N'Query Store wait category ''' + w.WaitCategory + N''' total_wait≈'
-        + CAST(CAST(w.TotalQueryWaitMs AS decimal(18, 1)) AS nvarchar(20)) + N' ms'
-        + N', avg_wait≈' + CAST(CAST(w.AvgQueryWaitMs AS decimal(18, 2)) AS nvarchar(20)) + N' ms'
+        + CAST(CAST(w.TotalQueryWaitSeconds AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
+        + N', avg_wait≈' + CAST(CAST(w.AvgQueryWaitSeconds AS decimal(18, 2)) AS nvarchar(20)) + N' sec'
         + N' across ' + CAST(w.TotalExecutionCount AS nvarchar(20)) + N' wait-stat rows in the window.',
     SuggestedAction = CASE w.WaitCategory
                           WHEN N'Lock' THEN N'Investigate blocking chains, long transactions, and missing indexes that extend lock duration.'
@@ -1300,12 +1301,12 @@ SELECT TOP (@TopN)
                           WHEN N'Network IO' THEN N'Large result sets or slow clients; consider filtering/pagination.'
                           ELSE N'Review top queries and plans contributing to this wait category.'
                       END,
-    MetricNumeric = CAST(w.TotalQueryWaitMs AS decimal(28, 4)),
-    MetricLabel = 'TotalQueryWaitMs',
+    MetricNumeric = CAST(w.TotalQueryWaitSeconds AS decimal(28, 4)),
+    MetricLabel = 'TotalQueryWaitSeconds',
     QueryTextShort = NULL
   FROM #WaitAgg AS w
- WHERE w.TotalQueryWaitMs >= 1000
- ORDER BY w.TotalQueryWaitMs DESC
+ WHERE w.TotalQueryWaitSeconds >= 1
+ ORDER BY w.TotalQueryWaitSeconds DESC
 
 ---------------------------------------------------------------------------------------------------
 -- Missing indexes (DMV) with suggested DDL
@@ -1501,10 +1502,10 @@ BEGIN
         q.ForceFailureCount,
         q.Executions,
         q.FailedExecutions,
-        AvgDurationMs      = CAST(q.AvgDurationUs / 1000.0 AS decimal(18, 2)),
-        MaxDurationMs      = CAST(ISNULL(q.MaxDurationUs, 0) / 1000.0 AS decimal(18, 2)),
-        AvgCpuMs           = CAST(q.AvgCpuUs / 1000.0 AS decimal(18, 2)),
-        MaxCpuMs           = CAST(ISNULL(q.MaxCpuUs, 0) / 1000.0 AS decimal(18, 2)),
+        AvgDurationSeconds = CAST(q.AvgDurationUs / 1000000.0 AS decimal(18, 2)),
+        MaxDurationSeconds = CAST(ISNULL(q.MaxDurationUs, 0) / 1000000.0 AS decimal(18, 2)),
+        AvgCpuSeconds      = CAST(q.AvgCpuUs / 1000000.0 AS decimal(18, 2)),
+        MaxCpuSeconds      = CAST(ISNULL(q.MaxCpuUs, 0) / 1000000.0 AS decimal(18, 2)),
         AvgLogicalReads    = CAST(q.AvgLogicalReads AS decimal(18, 1)),
         TotalLogicalReads  = CAST(q.TotalLogicalReads AS decimal(28, 1)),
         AvgPhysicalReads   = CAST(q.AvgPhysicalReads AS decimal(18, 1)),

@@ -53,8 +53,8 @@ DECLARE
     @BlankLine              varchar(120),
     @QueryIdWidth           tinyint,
     @ExecWidth              tinyint,
-    @AvgMsWidth             tinyint,
-    @CpuMsWidth             tinyint,
+    @AvgSecWidth            tinyint,
+    @CpuSecWidth            tinyint,
     @ReadsWidth             tinyint,
     @PlanWidth              tinyint,
     @DateWidth              tinyint,
@@ -136,8 +136,8 @@ SET @BlankLine      = REPLICATE(' ', @ReportWidth)
 
 SET @QueryIdWidth = 9
 SET @ExecWidth    = 8
-SET @AvgMsWidth   = 7
-SET @CpuMsWidth   = 7
+SET @AvgSecWidth  = 7
+SET @CpuSecWidth  = 7
 SET @ReadsWidth   = 8
 SET @PlanWidth    = 4
 SET @DateWidth    = 5
@@ -442,8 +442,8 @@ BEGIN
            LEFT(
                   LEFT('QUERY_ID', @QueryIdWidth)
                 + ' ' + LEFT('EXECS', @ExecWidth)
-                + ' ' + LEFT('AVGMS', @AvgMsWidth)
-                + ' ' + LEFT('CPUMS', @CpuMsWidth)
+                + ' ' + LEFT('AVGSEC', @AvgSecWidth)
+                + ' ' + LEFT('CPUSEC', @CpuSecWidth)
                 + ' ' + LEFT('READS', @ReadsWidth)
                 + ' ' + LEFT('PLN', @PlanWidth)
                 + ' ' + LEFT('USED', @DateWidth)
@@ -464,16 +464,16 @@ BEGIN
                     WHEN q.Executions >= 1000 THEN LTRIM(STR(q.Executions / 1000.0, 4, 1)) + 'K'
                     ELSE CAST(q.Executions AS varchar(10))
                 END, @ExecWidth)
-            + ' ' + RIGHT(REPLICATE(' ', @AvgMsWidth) + CASE
-                    WHEN (q.AvgDurationUs / 1000.0) >= 10000 THEN CAST(CAST(q.AvgDurationUs / 1000000 AS bigint) AS varchar(10)) + 'K'
-                    WHEN (q.AvgDurationUs / 1000.0) >= 1000 THEN LTRIM(STR(q.AvgDurationUs / 1000000.0, 4, 1)) + 'K'
-                    ELSE LTRIM(STR(q.AvgDurationUs / 1000.0, 6, 1))
-                END, @AvgMsWidth)
-            + ' ' + RIGHT(REPLICATE(' ', @CpuMsWidth) + CASE
-                    WHEN (q.AvgCpuUs / 1000.0) >= 10000 THEN CAST(CAST(q.AvgCpuUs / 1000000 AS bigint) AS varchar(10)) + 'K'
-                    WHEN (q.AvgCpuUs / 1000.0) >= 1000 THEN LTRIM(STR(q.AvgCpuUs / 1000000.0, 4, 1)) + 'K'
-                    ELSE LTRIM(STR(q.AvgCpuUs / 1000.0, 6, 1))
-                END, @CpuMsWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @AvgSecWidth) + CASE
+                    WHEN (q.AvgDurationUs / 1000000.0) >= 10000 THEN CAST(CAST(q.AvgDurationUs / 1000000000 AS bigint) AS varchar(10)) + 'K'
+                    WHEN (q.AvgDurationUs / 1000000.0) >= 1000 THEN LTRIM(STR(q.AvgDurationUs / 1000000000.0, 4, 1)) + 'K'
+                    ELSE LTRIM(STR(q.AvgDurationUs / 1000000.0, 7, 2))
+                END, @AvgSecWidth)
+            + ' ' + RIGHT(REPLICATE(' ', @CpuSecWidth) + CASE
+                    WHEN (q.AvgCpuUs / 1000000.0) >= 10000 THEN CAST(CAST(q.AvgCpuUs / 1000000000 AS bigint) AS varchar(10)) + 'K'
+                    WHEN (q.AvgCpuUs / 1000000.0) >= 1000 THEN LTRIM(STR(q.AvgCpuUs / 1000000000.0, 4, 1)) + 'K'
+                    ELSE LTRIM(STR(q.AvgCpuUs / 1000000.0, 7, 2))
+                END, @CpuSecWidth)
             + ' ' + RIGHT(REPLICATE(' ', @ReadsWidth) + CASE
                     WHEN q.AvgLogicalReads >= 1000000000 THEN CAST(q.AvgLogicalReads / 1000000000 AS varchar(10)) + 'B'
                     WHEN q.AvgLogicalReads >= 1000000 THEN LTRIM(STR(q.AvgLogicalReads / 1000000.0, 4, 1)) + 'M'
@@ -498,7 +498,7 @@ BEGIN
     INSERT INTO #Report ([LineNo], ReportLine)
     SELECT @LineNo + 1, LEFT(@Divider, @ReportWidth)
     UNION ALL
-    SELECT @LineNo + 2, LEFT(' Legend: AVGMS/CPUMS in milliseconds. PLN=plan count. *=forced plan in store.' + @BlankLine, @ReportWidth)
+    SELECT @LineNo + 2, LEFT(' Legend: AVGSEC/CPUSEC in seconds. PLN=plan count. *=forced plan in store.' + @BlankLine, @ReportWidth)
     UNION ALL
     SELECT @LineNo + 3, LEFT(' Note: Query Store must be READ_WRITE or READ_ONLY. Query text is truncated in this report.' + @BlankLine, @ReportWidth)
     UNION ALL

@@ -568,7 +568,7 @@ BEGIN
             + ' ' + LEFT('WORKLOAD' + @BlankLine, @NameWidth)
             + ' ' + LEFT('EXECS' + @BlankLine, @ExecWidth)
             + ' ' + LEFT('LAST' + @BlankLine, @LastWidth)
-            + ' ' + LEFT('AVGMS' + @BlankLine, @AvgWidth),
+            + ' ' + LEFT('AVGSEC' + @BlankLine, @AvgWidth),
             @ReportWidth)),
         (@LineNo + 4, LEFT(@Divider, @ReportWidth))
 
@@ -604,9 +604,9 @@ BEGIN
                              + RIGHT('0' + CAST(DAY(w.LastExecutionTime) AS varchar(2)), 2)
                     END + @BlankLine, @LastWidth)
             + ' ' + RIGHT(REPLICATE(' ', @AvgWidth) + CASE
-                    WHEN (w.AvgDurationUs / 1000.0) >= 10000 THEN CAST(CAST(w.AvgDurationUs / 1000000 AS bigint) AS varchar(10)) + 'K'
-                    WHEN (w.AvgDurationUs / 1000.0) >= 1000 THEN LTRIM(STR(w.AvgDurationUs / 1000000.0, 4, 1)) + 'K'
-                    ELSE LTRIM(STR(w.AvgDurationUs / 1000.0, 6, 1))
+                    WHEN (w.AvgDurationUs / 1000000.0) >= 10000 THEN CAST(CAST(w.AvgDurationUs / 1000000000 AS bigint) AS varchar(10)) + 'K'
+                    WHEN (w.AvgDurationUs / 1000000.0) >= 1000 THEN LTRIM(STR(w.AvgDurationUs / 1000000000.0, 4, 1)) + 'K'
+                    ELSE LTRIM(STR(w.AvgDurationUs / 1000000.0, 7, 2))
                 END, @AvgWidth),
             @ReportWidth)
       FROM (
@@ -626,7 +626,7 @@ BEGIN
     INSERT INTO #Report ([LineNo], ReportLine)
     SELECT @LineNo + 1, LEFT(@Divider, @ReportWidth)
     UNION ALL
-    SELECT @LineNo + 2, LEFT(' Legend: WORKLOAD groups Query Store entries by object or query hash.' + @BlankLine, @ReportWidth)
+    SELECT @LineNo + 2, LEFT(' Legend: AVGSEC is average duration in seconds. WORKLOAD groups Query Store entries by object or query hash.' + @BlankLine, @ReportWidth)
     UNION ALL
     SELECT @LineNo + 3, LEFT(' Types: Stored Procedure, Procedure Call, SQL Agent / Job, Maintenance, Application Query.' + @BlankLine, @ReportWidth)
     UNION ALL

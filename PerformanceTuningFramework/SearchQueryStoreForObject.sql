@@ -293,8 +293,8 @@ SELECT
     m.PlanCount,
     m.IsForcedPlan,
     m.Executions,
-    AvgDurationMs = CAST(m.AvgDurationUs / 1000.0 AS decimal(18, 3)),
-    AvgCpuMs = CAST(m.AvgCpuUs / 1000.0 AS decimal(18, 3)),
+    AvgDurationSeconds = CAST(m.AvgDurationUs / 1000000.0 AS decimal(18, 2)),
+    AvgCpuSeconds = CAST(m.AvgCpuUs / 1000000.0 AS decimal(18, 2)),
     m.AvgLogicalReads,
     m.LastExecutionTime,
     m.query_sql_text AS QueryText
