@@ -137,6 +137,7 @@ ELSE
     @SizeBasedCleanupMode    = CAST(NULL AS nvarchar(60)),
     @WaitStatsCaptureMode    = CAST(NULL AS nvarchar(60))'
 
+/* capture_policy_total_*_cpu_time_ms catalog unit is milliseconds; result columns display seconds. */
 IF @MajorVersion >= 15
     SET @OptionsSelectList = @OptionsSelectList + N',
     @CapturePolicyExecCount  = qso.capture_policy_execution_count,
@@ -177,10 +178,10 @@ CREATE TABLE #QueryStoreStatus
     QueryCaptureMode           nvarchar(60)    NULL,
     SizeBasedCleanupMode       nvarchar(60)    NULL,
     WaitStatsCaptureMode       nvarchar(60)    NULL,
-    CapturePolicyExecCount     int             NULL,
-    CapturePolicyCompileCpuMs  bigint          NULL,
-    CapturePolicyExecCpuMs     bigint          NULL,
-    CapturePolicyStaleHours    int             NULL,
+    CapturePolicyExecCount         int             NULL,
+    CapturePolicyCompileCpuSeconds decimal(18, 2)  NULL, /* catalog unit: milliseconds */
+    CapturePolicyExecCpuSeconds    decimal(18, 2)  NULL, /* catalog unit: milliseconds */
+    CapturePolicyStaleHours        int             NULL,
     QueryCount                 int             NULL,
     PlanCount                  int             NULL,
     ForcedPlanCount            int             NULL,
@@ -395,8 +396,8 @@ SELECT
             SizeBasedCleanupMode,
             WaitStatsCaptureMode,
             CapturePolicyExecCount,
-            CapturePolicyCompileCpuMs,
-            CapturePolicyExecCpuMs,
+            CapturePolicyCompileCpuSeconds,
+            CapturePolicyExecCpuSeconds,
             CapturePolicyStaleHours,
             QueryCount,
             PlanCount,
@@ -446,8 +447,10 @@ SELECT
             @SizeBasedCleanupMode,
             @WaitStatsCaptureMode,
             @CapturePolicyExecCount,
-            @CapturePolicyCompileCpu,
-            @CapturePolicyExecCpu,
+            CASE WHEN @CapturePolicyCompileCpu IS NULL THEN CAST(NULL AS decimal(18, 2))
+                 ELSE CAST(@CapturePolicyCompileCpu / 1000.0 AS decimal(18, 2)) END,
+            CASE WHEN @CapturePolicyExecCpu IS NULL THEN CAST(NULL AS decimal(18, 2))
+                 ELSE CAST(@CapturePolicyExecCpu / 1000.0 AS decimal(18, 2)) END,
             @CapturePolicyStaleHours,
             @QueryCount,
             @PlanCount,
@@ -517,8 +520,8 @@ SELECT
     SizeBasedCleanupMode,
     WaitStatsCaptureMode,
     CapturePolicyExecCount,
-    CapturePolicyCompileCpuMs,
-    CapturePolicyExecCpuMs,
+    CapturePolicyCompileCpuSeconds,
+    CapturePolicyExecCpuSeconds,
     CapturePolicyStaleHours,
     QueryCount,
     PlanCount,

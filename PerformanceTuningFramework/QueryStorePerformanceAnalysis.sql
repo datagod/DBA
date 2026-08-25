@@ -946,25 +946,25 @@ END;
               decimal(28, 2),
               t.total_cpu_us
               / NULLIF(CONVERT(float, t.execution_count), 0.0)
-              / 1000.0
-          ) AS average_cpu_ms
+              / 1000000.0
+          ) AS average_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
               t.total_duration_us
               / NULLIF(CONVERT(float, t.execution_count), 0.0)
-              / 1000.0
-          ) AS average_duration_ms
+              / 1000000.0
+          ) AS average_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
-              CONVERT(float, t.maximum_cpu_us) / 1000.0
-          ) AS maximum_cpu_ms
+              CONVERT(float, t.maximum_cpu_us) / 1000000.0
+          ) AS maximum_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
-              CONVERT(float, t.maximum_duration_us) / 1000.0
-          ) AS maximum_duration_ms
+              CONVERT(float, t.maximum_duration_us) / 1000000.0
+          ) AS maximum_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
@@ -1233,13 +1233,13 @@ END;
         , CONVERT
           (
               decimal(28, 2),
-              r.baseline_average_duration_us / 1000.0
-          ) AS baseline_average_duration_ms
+              r.baseline_average_duration_us / 1000000.0
+          ) AS baseline_average_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
-              r.recent_average_duration_us / 1000.0
-          ) AS recent_average_duration_ms
+              r.recent_average_duration_us / 1000000.0
+          ) AS recent_average_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
@@ -1248,13 +1248,13 @@ END;
         , CONVERT
           (
               decimal(28, 2),
-              r.baseline_average_cpu_us / 1000.0
-          ) AS baseline_average_cpu_ms
+              r.baseline_average_cpu_us / 1000000.0
+          ) AS baseline_average_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
-              r.recent_average_cpu_us / 1000.0
-          ) AS recent_average_cpu_ms
+              r.recent_average_cpu_us / 1000000.0
+          ) AS recent_average_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
@@ -1410,25 +1410,25 @@ END;
               decimal(28, 2),
               t.total_cpu_us
               / NULLIF(CONVERT(float, t.execution_count), 0.0)
-              / 1000.0
-          ) AS average_cpu_ms
+              / 1000000.0
+          ) AS average_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
               t.total_duration_us
               / NULLIF(CONVERT(float, t.execution_count), 0.0)
-              / 1000.0
-          ) AS average_duration_ms
+              / 1000000.0
+          ) AS average_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
-              CONVERT(float, t.maximum_cpu_us) / 1000.0
-          ) AS maximum_cpu_ms
+              CONVERT(float, t.maximum_cpu_us) / 1000000.0
+          ) AS maximum_cpu_seconds
         , CONVERT
           (
               decimal(28, 2),
-              CONVERT(float, t.maximum_duration_us) / 1000.0
-          ) AS maximum_duration_ms
+              CONVERT(float, t.maximum_duration_us) / 1000000.0
+          ) AS maximum_duration_seconds
         , CONVERT
           (
               decimal(28, 2),
