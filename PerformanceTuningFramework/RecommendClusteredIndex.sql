@@ -43,10 +43,16 @@ AS
 -- Date Created: June 25, 2026
 -- Author:       Bill McEvoy
 -- Description:  Examines one user table and related DMVs to recommend a clustered index. Prioritizes
---               a single ascending identity column when one already exists. A single integer column
---               is preferred over any compound key (compound PK, missing-index, or NC key). When
+--               a single ascending identity column when one already exists and @PreferIdentity is on.
+--               Then considers the primary key (single-column or compound), missing-index keys,
+--               most-used nonclustered keys, and a narrow-column heuristic. Does not prefer a lone
+--               integer column over a compound PK, missing-index key, or NC key. When
 --               @SuggestNewColumns is yes, may also recommend adding a new identity column. Default
---               is no: use only columns that already exist on the table.
+--               is no: use only columns that already exist on the table. Result includes Justification
+--               plus uniqueness for the suggested key (SuggestedKeyIsUnique, DistinctCount,
+--               UniquenessPercent) from unique indexes/PKs and sys.stats; the table is not scanned.
+-- Date Revised: August 25, 2026
+-- Reason:       Remove the single-integer override. List uniqueness and a Justification column.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -65,7 +71,10 @@ DECLARE
     @CaptureDate         datetime,
     @ProposedIdentityCol sysname,
     @ObjectId            int,
-    @SuggestNewColumnsOn bit
+    @SuggestNewColumnsOn bit,
+    @KeyList             nvarchar(2000),
+    @Piece               nvarchar(256),
+    @Comma               int
 
 IF @TargetDatabase IS NULL OR @TableName IS NULL
 BEGIN
@@ -166,15 +175,48 @@ CREATE TABLE #ClusteredRecommendation
     IdentityIsAscending        bit            NOT NULL,
     IdentityIsPreferredType    bit            NOT NULL,
     HeuristicColumn            sysname        NULL,
-    IntegerColumn              sysname        NULL,
-    IntegerTypeName            sysname        NULL,
+    PartitionRowCount          bigint         NOT NULL,
     SuggestionSource           varchar(30)    NOT NULL,
     SuggestedKeyColumns        nvarchar(2000) NOT NULL,
+    SuggestedKeyIsUnique       bit            NOT NULL,
+    DistinctCount              bigint         NULL,
+    UniquenessPercent          decimal(8, 2)  NULL,
     RecommendationScore        int            NOT NULL,
-    RecommendationRationale    nvarchar(2000) NOT NULL,
+    Justification              nvarchar(2000) NOT NULL,
     SuggestedAlterTableDdl     nvarchar(max)  NULL,
     SuggestedClusteredDdl      nvarchar(max)  NOT NULL,
     SuggestedNonClusteredDdl   nvarchar(max)  NULL
+)
+
+IF OBJECT_ID('tempdb..#UniqueIndexKeyCols') IS NOT NULL
+    DROP TABLE #UniqueIndexKeyCols
+
+CREATE TABLE #UniqueIndexKeyCols
+(
+    IndexName  sysname NOT NULL,
+    ColumnName sysname NOT NULL,
+    KeyOrdinal int     NOT NULL
+)
+
+IF OBJECT_ID('tempdb..#ColumnStats') IS NOT NULL
+    DROP TABLE #ColumnStats
+
+CREATE TABLE #ColumnStats
+(
+    ColumnName       sysname NOT NULL,
+    StatsName        sysname NOT NULL,
+    StatsId          int     NOT NULL,
+    StatsColumnCount int     NOT NULL,
+    StatsRows        bigint  NULL,
+    DistinctCount    bigint  NULL
+)
+
+IF OBJECT_ID('tempdb..#SuggestedKeyCols') IS NOT NULL
+    DROP TABLE #SuggestedKeyCols
+
+CREATE TABLE #SuggestedKeyCols
+(
+    ColumnName sysname NOT NULL
 )
 
 SET @Sql = N'
@@ -434,38 +476,15 @@ HeuristicColumn AS
       ) AS x
      WHERE x.rn = 1
 ),
-BestIntegerColumn AS
+PartitionRows AS
 (
     SELECT
-        x.object_id,
-        IntegerColumn = x.ColumnName,
-        IntegerTypeName = x.TypeName
-      FROM (
-          SELECT
-              c.object_id,
-              c.name AS ColumnName,
-              t.name AS TypeName,
-              rn = ROW_NUMBER() OVER (
-                  ORDER BY
-                      CASE WHEN c.is_identity = 1 THEN 0 ELSE 1 END,
-                      CASE t.name
-                          WHEN ''int'' THEN 1
-                          WHEN ''bigint'' THEN 2
-                          WHEN ''smallint'' THEN 3
-                          WHEN ''tinyint'' THEN 4
-                          ELSE 100
-                      END,
-                      c.column_id
-              )
-            FROM __TARGET_DB__.sys.columns AS c
-           INNER JOIN __TARGET_DB__.sys.types AS t
-              ON t.user_type_id = c.user_type_id
-           WHERE c.object_id = @ObjectId
-             AND c.is_computed = 0
-             AND c.is_sparse = 0
-             AND t.name IN (''tinyint'', ''smallint'', ''int'', ''bigint'')
-      ) AS x
-     WHERE x.rn = 1
+        p.object_id,
+        PartitionRowCount = SUM(p.rows)
+      FROM __TARGET_DB__.sys.partitions AS p
+     WHERE p.object_id = @ObjectId
+       AND p.index_id IN (0, 1)
+     GROUP BY p.object_id
 ),
 Prepared AS
 (
@@ -502,8 +521,7 @@ Prepared AS
         IdentityIsAscending = ISNULL(bi.IdentityIsAscending, 0),
         IdentityIsPreferredType = ISNULL(bi.IdentityIsPreferredType, 0),
         HeuristicColumn = hc.HeuristicColumn,
-        IntegerColumn = bic.IntegerColumn,
-        IntegerTypeName = bic.IntegerTypeName,
+        PartitionRowCount = ISNULL(pr.PartitionRowCount, 0),
         MissingIndexKeyColumns = NULLIF(LTRIM(RTRIM(
             CASE
                 WHEN NULLIF(LTRIM(RTRIM(mi.MissingIndexEqualityCols)), '''') IS NOT NULL
@@ -533,8 +551,8 @@ Prepared AS
         ON mi.object_id = tt.ObjectID
       LEFT JOIN HeuristicColumn AS hc
         ON hc.object_id = tt.ObjectID
-      LEFT JOIN BestIntegerColumn AS bic
-        ON bic.object_id = tt.ObjectID
+      LEFT JOIN PartitionRows AS pr
+        ON pr.object_id = tt.ObjectID
 )
 INSERT INTO #ClusteredRecommendation
 (
@@ -571,12 +589,12 @@ INSERT INTO #ClusteredRecommendation
     IdentityIsAscending,
     IdentityIsPreferredType,
     HeuristicColumn,
-    IntegerColumn,
-    IntegerTypeName,
+    PartitionRowCount,
     SuggestionSource,
     SuggestedKeyColumns,
+    SuggestedKeyIsUnique,
     RecommendationScore,
-    RecommendationRationale,
+    Justification,
     SuggestedAlterTableDdl,
     SuggestedClusteredDdl,
     SuggestedNonClusteredDdl
@@ -615,12 +633,12 @@ SELECT
     p.IdentityIsAscending,
     p.IdentityIsPreferredType,
     p.HeuristicColumn,
-    p.IntegerColumn,
-    p.IntegerTypeName,
+    p.PartitionRowCount,
     SuggestionSource = ''PENDING'',
     SuggestedKeyColumns = '''',
+    SuggestedKeyIsUnique = 0,
     RecommendationScore = 0,
-    RecommendationRationale = '''',
+    Justification = '''',
     SuggestedAlterTableDdl = NULL,
     SuggestedClusteredDdl = '''',
     SuggestedNonClusteredDdl = NULL
@@ -654,6 +672,96 @@ END
 SELECT @ObjectId = ObjectID
   FROM #ClusteredRecommendation
 
+-- Unique-index columns and leading-column stats. Catalog / DMV only; do not scan the table.
+SET @Sql = N'
+INSERT #UniqueIndexKeyCols (IndexName, ColumnName, KeyOrdinal)
+SELECT
+    i.name,
+    c.name,
+    ic.key_ordinal
+  FROM __TARGET_DB__.sys.indexes AS i
+ INNER JOIN __TARGET_DB__.sys.index_columns AS ic
+    ON ic.object_id = i.object_id
+   AND ic.index_id = i.index_id
+ INNER JOIN __TARGET_DB__.sys.columns AS c
+    ON c.object_id = ic.object_id
+   AND c.column_id = ic.column_id
+ WHERE i.object_id = @ObjectId
+   AND i.is_unique = 1
+   AND i.is_hypothetical = 0
+   AND i.has_filter = 0
+   AND ic.is_included_column = 0
+   AND ic.key_ordinal > 0
+
+INSERT #ColumnStats
+(
+    ColumnName,
+    StatsName,
+    StatsId,
+    StatsColumnCount,
+    StatsRows,
+    DistinctCount
+)
+SELECT
+    c.name,
+    st.name,
+    st.stats_id,
+    StatsColumnCount = (
+        SELECT COUNT(*)
+          FROM __TARGET_DB__.sys.stats_columns AS sc2
+         WHERE sc2.object_id = st.object_id
+           AND sc2.stats_id = st.stats_id
+    ),
+    __STATS_ROWS__,
+    __STATS_DISTINCT__
+  FROM __TARGET_DB__.sys.stats AS st
+ INNER JOIN __TARGET_DB__.sys.stats_columns AS sc
+    ON sc.object_id = st.object_id
+   AND sc.stats_id = st.stats_id
+   AND sc.stats_column_id = 1
+ INNER JOIN __TARGET_DB__.sys.columns AS c
+    ON c.object_id = sc.object_id
+   AND c.column_id = sc.column_id
+ __STATS_APPLY__
+ WHERE st.object_id = @ObjectId
+   AND st.has_filter = 0'
+
+IF @MajorVersion >= 13
+BEGIN
+    SET @Sql = REPLACE(@Sql, N'__STATS_ROWS__', N'sp.rows')
+    SET @Sql = REPLACE(@Sql, N'__STATS_DISTINCT__', N'hist.DistinctCount')
+    SET @Sql = REPLACE(@Sql, N'__STATS_APPLY__', N'CROSS APPLY __TARGET_DB__.sys.dm_db_stats_properties(st.object_id, st.stats_id) AS sp
+ OUTER APPLY (
+     SELECT DistinctCount = SUM(h.distinct_range_rows) + COUNT_BIG(*)
+       FROM __TARGET_DB__.sys.dm_db_stats_histogram(st.object_id, st.stats_id) AS h
+ ) AS hist')
+END
+ELSE IF @MajorVersion >= 11
+BEGIN
+    SET @Sql = REPLACE(@Sql, N'__STATS_ROWS__', N'sp.rows')
+    SET @Sql = REPLACE(@Sql, N'__STATS_DISTINCT__', N'CONVERT(bigint, NULL)')
+    SET @Sql = REPLACE(@Sql, N'__STATS_APPLY__', N'CROSS APPLY __TARGET_DB__.sys.dm_db_stats_properties(st.object_id, st.stats_id) AS sp')
+END
+ELSE
+BEGIN
+    SET @Sql = REPLACE(@Sql, N'__STATS_ROWS__', N'CONVERT(bigint, NULL)')
+    SET @Sql = REPLACE(@Sql, N'__STATS_DISTINCT__', N'CONVERT(bigint, NULL)')
+    SET @Sql = REPLACE(@Sql, N'__STATS_APPLY__', N'')
+END
+
+SET @Sql = REPLACE(@Sql, N'__TARGET_DB__', @QuotedDatabase)
+
+BEGIN TRY
+    EXEC sys.sp_executesql
+        @Sql,
+        N'@ObjectId int',
+        @ObjectId = @ObjectId
+END TRY
+BEGIN CATCH
+    -- Recommendation stands if stats DMVs are unavailable; uniqueness columns stay NULL.
+    SET @Sql = NULL
+END CATCH
+
 UPDATE r
    SET SuggestionSource = CASE
            WHEN r.HasClusteredIndex = 1
@@ -675,8 +783,6 @@ UPDATE r
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN 'ADD_IDENTITY'
-           WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN 'PRIMARY_KEY'
-           WHEN r.IntegerColumn IS NOT NULL THEN 'SINGLE_INTEGER'
            WHEN r.PrimaryKeyColumns IS NOT NULL THEN 'PRIMARY_KEY'
            WHEN r.MissingIndexKeyColumns IS NOT NULL
                 AND ISNULL(r.MissingIndexImpact, 0) >= 10000
@@ -714,8 +820,6 @@ UPDATE r
                 AND r.IdentityColumn IS NULL
                 AND r.PrimaryKeyColumns IS NULL
                THEN QUOTENAME(@ProposedIdentityCol) + ' ASC'
-           WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN r.PrimaryKeyColumns
-           WHEN r.IntegerColumn IS NOT NULL THEN QUOTENAME(r.IntegerColumn) + ' ASC'
            WHEN r.PrimaryKeyColumns IS NOT NULL THEN r.PrimaryKeyColumns
            WHEN r.MissingIndexKeyColumns IS NOT NULL
                 AND ISNULL(r.MissingIndexImpact, 0) >= 10000
@@ -741,7 +845,6 @@ UPDATE r
            + CASE WHEN ISNULL(r.MissingIndexImpact, 0) >= 1000000 THEN 20 WHEN ISNULL(r.MissingIndexImpact, 0) >= 100000 THEN 12 WHEN ISNULL(r.MissingIndexImpact, 0) >= 10000 THEN 6 ELSE 0 END
            + CASE WHEN @PreferIdentity = 1 AND r.IdentityColumn IS NOT NULL AND r.IdentityIsAscending = 1 THEN 25 ELSE 0 END
            + CASE WHEN @PreferIdentity = 1 AND @SuggestNewColumnsOn = 1 AND r.IdentityColumn IS NULL AND r.PrimaryKeyColumns IS NULL THEN 15 ELSE 0 END
-           + CASE WHEN r.IntegerColumn IS NOT NULL THEN 18 ELSE 0 END
            + CASE WHEN r.PrimaryKeyColumns IS NOT NULL AND CHARINDEX(',', r.PrimaryKeyColumns) = 0 THEN 10
                   WHEN r.PrimaryKeyColumns IS NOT NULL THEN 4
                   ELSE 0 END
@@ -749,7 +852,7 @@ UPDATE r
   FROM #ClusteredRecommendation AS r
 
 UPDATE r
-   SET RecommendationRationale =
+   SET Justification =
            CASE r.SuggestionSource
                WHEN 'IDENTITY' THEN 'Ascending identity column [' + r.IdentityColumn + '] (' + ISNULL(r.IdentityTypeName, '?')
                     + ', seed ' + ISNULL(CONVERT(varchar(30), r.IdentitySeed), '?')
@@ -760,9 +863,8 @@ UPDATE r
                     + ']. A single ascending identity column [' + r.IdentityColumn + '] is available and is preferred for insert locality.'
                WHEN 'ALREADY_CLUSTERED' THEN 'Table already has clustered index [' + ISNULL(r.ExistingClusteredIndexName, '?') + '] on ('
                     + ISNULL(r.ExistingClusteredKeyColumns, '?') + '). No change recommended unless workload analysis suggests otherwise.'
-               WHEN 'SINGLE_INTEGER' THEN 'Single integer column [' + r.IntegerColumn + '] (' + ISNULL(r.IntegerTypeName, '?')
-                    + ') is preferred over a compound clustering key. Narrow integer keys keep the clustered index and all nonclustered leaf pointers small.'
-               WHEN 'PRIMARY_KEY' THEN 'Nonclustered primary key columns should be clustered to eliminate RID lookups and stabilize nonclustered index leaf pointers.'
+               WHEN 'PRIMARY_KEY' THEN 'Primary key columns (' + ISNULL(r.PrimaryKeyColumns, '?')
+                    + ') should be clustered to eliminate RID lookups and stabilize nonclustered index leaf pointers.'
                WHEN 'MISSING_INDEX' THEN 'Missing-index DMVs show sustained access patterns on these key columns (impact score '
                     + ISNULL(CONVERT(varchar(20), CONVERT(bigint, r.MissingIndexImpact)), '0') + ').'
                WHEN 'NC_INDEX_USAGE' THEN 'Most-used nonclustered index [' + ISNULL(r.TopNcIndexName, '?')
@@ -841,6 +943,96 @@ UPDATE r
            END
   FROM #ClusteredRecommendation AS r
 
+-- Uniqueness of the chosen key: unique index/PK subset, or single-column stats. No table scan.
+DELETE FROM #SuggestedKeyCols
+
+SELECT @KeyList = REPLACE(REPLACE(ISNULL(SuggestedKeyColumns, ''), ' ASC', ''), ' DESC', '')
+  FROM #ClusteredRecommendation
+
+SET @KeyList = ISNULL(@KeyList, '')
+
+WHILE LEN(@KeyList) > 0
+BEGIN
+    SET @Comma = CHARINDEX(',', @KeyList)
+    IF @Comma = 0
+    BEGIN
+        SET @Piece = LTRIM(RTRIM(@KeyList))
+        SET @KeyList = ''
+    END
+    ELSE
+    BEGIN
+        SET @Piece = LTRIM(RTRIM(LEFT(@KeyList, @Comma - 1)))
+        SET @KeyList = LTRIM(RTRIM(SUBSTRING(@KeyList, @Comma + 1, 4000)))
+    END
+
+    SET @Piece = REPLACE(REPLACE(@Piece, '[', ''), ']', '')
+
+    IF @Piece <> ''
+        INSERT #SuggestedKeyCols (ColumnName) VALUES (@Piece)
+END
+
+UPDATE r
+   SET SuggestedKeyIsUnique =
+           CASE
+               WHEN r.SuggestionSource = 'ADD_IDENTITY' THEN 1
+               WHEN r.SuggestionSource = 'MANUAL_REVIEW' OR NULLIF(r.SuggestedKeyColumns, '') IS NULL THEN 0
+               WHEN EXISTS (
+                        SELECT 1
+                          FROM (
+                              SELECT DISTINCT u.IndexName
+                                FROM #UniqueIndexKeyCols AS u
+                          ) AS idx
+                         WHERE NOT EXISTS (
+                                   SELECT 1
+                                     FROM #UniqueIndexKeyCols AS u
+                                    WHERE u.IndexName = idx.IndexName
+                                      AND NOT EXISTS (
+                                              SELECT 1
+                                                FROM #SuggestedKeyCols AS s
+                                               WHERE s.ColumnName = u.ColumnName
+                                          )
+                               )
+                    ) THEN 1
+               ELSE 0
+           END
+  FROM #ClusteredRecommendation AS r
+
+UPDATE r
+   SET DistinctCount =
+           CASE
+               WHEN r.SuggestedKeyIsUnique = 1 THEN
+                   CASE
+                       WHEN r.RecordCount > 0 THEN r.RecordCount
+                       WHEN r.PartitionRowCount > 0 THEN r.PartitionRowCount
+                       ELSE 0
+                   END
+               WHEN (SELECT COUNT(*) FROM #SuggestedKeyCols) = 1 THEN
+                   (
+                       SELECT TOP (1) cs.DistinctCount
+                         FROM #ColumnStats AS cs
+                        INNER JOIN #SuggestedKeyCols AS s
+                           ON s.ColumnName = cs.ColumnName
+                        ORDER BY
+                            CASE WHEN cs.StatsColumnCount = 1 THEN 0 ELSE 1 END,
+                            CASE WHEN cs.DistinctCount IS NOT NULL THEN 0 ELSE 1 END,
+                            cs.StatsRows DESC
+                   )
+               ELSE NULL
+           END
+  FROM #ClusteredRecommendation AS r
+
+UPDATE r
+   SET UniquenessPercent =
+           CASE
+               WHEN r.SuggestedKeyIsUnique = 1 THEN CONVERT(decimal(8, 2), 100)
+               WHEN r.DistinctCount IS NULL THEN NULL
+               WHEN ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) <= 0 THEN NULL
+               WHEN r.DistinctCount * 100.0 / ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) > 100
+                   THEN CONVERT(decimal(8, 2), 100)
+               ELSE CONVERT(decimal(8, 2), r.DistinctCount * 100.0 / ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount))
+           END
+  FROM #ClusteredRecommendation AS r
+
 IF @ReturnResultSets = 1
 BEGIN
     SELECT
@@ -852,7 +1044,7 @@ BEGIN
         PreferIdentity = @PreferIdentity,
         SuggestNewColumns = @SuggestNewColumns,
         ProposedIdentityColumn = CASE WHEN @SuggestNewColumnsOn = 1 THEN @ProposedIdentityCol ELSE NULL END,
-        Note = 'Uses existing table columns by default. Set @SuggestNewColumns = ''yes'' to allow recommending a new identity column. Usage stats are since instance restart. Test DDL in a maintenance window.'
+        Note = 'Uses existing table columns by default. Set @SuggestNewColumns = ''yes'' to allow recommending a new identity column. Uniqueness comes from unique indexes/PKs and sys.stats (no table scan). Usage stats are since instance restart. Test DDL in a maintenance window.'
 
     SELECT
         SchemaName,
@@ -876,6 +1068,7 @@ BEGIN
         MissingIndexInequalityCols,
         MissingIndexIncludedCols,
         PrimaryKeyColumns,
+        PrimaryKeyIsUnique,
         TopNcIndexName,
         TopNcKeyColumns,
         TopNcTotalReads,
@@ -887,8 +1080,11 @@ BEGIN
         IdentityIsPreferredType,
         SuggestionSource,
         SuggestedKeyColumns,
+        SuggestedKeyIsUnique,
+        DistinctCount,
+        UniquenessPercent,
         RecommendationScore,
-        RecommendationRationale,
+        Justification,
         SuggestedAlterTableDdl,
         SuggestedClusteredDdl,
         SuggestedNonClusteredDdl

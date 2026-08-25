@@ -199,6 +199,51 @@ Recommendation priority:
 Note: `LIMITED` does not scan heap data pages, so forwarded-record and fragmentation numbers stay empty unless `@ScanMode` is `SAMPLED` or `DETAILED`. Record counts always come from `sys.partitions`. Usage statistics reset when the SQL Server instance restarts. When the host instance is newer than the target compatibility level (for example SQL Server 2022 with compatibility level 100), heap detection and recommendations honor the target database mode. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window; existing nonclustered indexes are rebuilt when a clustered index is created.
 
 
+### RecommendClusteredIndex
+
+File: `RecommendClusteredIndex.sql`
+
+Stored procedure that examines one user table and recommends a clustered index. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database.
+
+- Prioritizes an existing ascending identity column when `@PreferIdentity` is 1
+- Then considers the primary key (single-column or compound), missing-index keys, most-used nonclustered keys, and a narrow-column heuristic
+- Does not prefer a lone integer column over a compound PK, missing-index key, or NC key
+- When `@SuggestNewColumns` is yes, may recommend adding a new identity column if none exists and there is no PK
+- Returns `Justification` for the chosen key, plus `SuggestedKeyIsUnique`, `DistinctCount`, and `UniquenessPercent`
+- Uniqueness comes from unique indexes/PKs and `sys.stats` / `sys.dm_db_stats_properties` (histogram on SQL Server 2016+). The table is not scanned.
+
+Deployment:
+
+```sql
+-- Run RecommendClusteredIndex.sql in the tool database
+EXEC dbo.RecommendClusteredIndex
+     @TargetDatabase    = N'YourDatabase',
+     @SchemaName        = N'dbo',
+     @TableName         = N'YourTable',
+     @SuggestNewColumns = N'no'
+```
+
+Parameters:
+
+- `@TargetDatabase` — database that contains the table
+- `@SchemaName` — schema (default `dbo`)
+- `@TableName` — table to examine
+- `@PreferIdentity` — prefer an existing ascending integer identity as the clustering key (default `1`)
+- `@SuggestNewColumns` — `yes` allows recommending a new identity column; default `no` uses existing columns only
+- `@ReturnResultSets` — return summary and detail result sets (default `1`)
+
+Recommendation priority:
+
+1. Recluster onto an existing ascending identity when `@PreferIdentity` is on and the table is already clustered on something else
+2. Keep the existing clustered index
+3. Existing ascending identity (`@PreferIdentity` = 1)
+4. Add identity when `@SuggestNewColumns` is yes and there is no identity or PK
+5. Primary key (single-column or compound)
+6. Missing-index / NC usage signals
+7. Remaining identity / heuristic / manual review
+
+Note: usage statistics reset when the SQL Server instance restarts. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window.
+
 ### ShowTableInfo
 
 File: `ShowTableInfo.sql`
