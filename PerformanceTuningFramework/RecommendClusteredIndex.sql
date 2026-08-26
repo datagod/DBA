@@ -45,14 +45,19 @@ AS
 -- Description:  Examines one user table and related DMVs to recommend a clustered index. Prioritizes
 --               a single ascending identity column when one already exists and @PreferIdentity is on.
 --               Then considers the primary key (single-column or compound), missing-index keys,
---               most-used nonclustered keys, and a narrow-column heuristic. Does not prefer a lone
---               integer column over a compound PK, missing-index key, or NC key. When
+--               most-used nonclustered keys, and a narrow-column heuristic. Prefers a small unique
+--               existing column when one is available. If the first-choice heuristic, missing-index,
+--               NC, or non-unique PK key is low-cardinality (known DistinctCount with poor
+--               UniquenessPercent for the table size), skips it and picks a better unique/narrow
+--               column. If none, MANUAL_REVIEW and does not emit CREATE CLUSTERED INDEX on that key.
+--               A unique PK, including a compound unique PK, remains valid. Does not prefer a lone
+--               integer column over a compound unique PK, missing-index key, or NC key. When
 --               @SuggestNewColumns is yes, may also recommend adding a new identity column. Default
 --               is no: use only columns that already exist on the table. Result includes Justification
 --               plus uniqueness for the suggested key (SuggestedKeyIsUnique, DistinctCount,
 --               UniquenessPercent) from unique indexes/PKs and sys.stats; the table is not scanned.
 -- Date Revised: August 25, 2026
--- Reason:       Remove the single-integer override. List uniqueness and a Justification column.
+-- Reason:       Reject low-cardinality clustering keys. Prefer a small unique column.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -74,7 +79,13 @@ DECLARE
     @SuggestNewColumnsOn bit,
     @KeyList             nvarchar(2000),
     @Piece               nvarchar(256),
-    @Comma               int
+    @Comma               int,
+    @TableRows           bigint,
+    @IsLowCardinality    bit,
+    @AltColumn           sysname,
+    @RejectedKey         nvarchar(2000),
+    @RejectedDistinct    bigint,
+    @RejectedUniqPct     decimal(8, 2)
 
 IF @TargetDatabase IS NULL OR @TableName IS NULL
 BEGIN
@@ -209,6 +220,32 @@ CREATE TABLE #ColumnStats
     StatsColumnCount int     NOT NULL,
     StatsRows        bigint  NULL,
     DistinctCount    bigint  NULL
+)
+
+IF OBJECT_ID('tempdb..#TableColumns') IS NOT NULL
+    DROP TABLE #TableColumns
+
+CREATE TABLE #TableColumns
+(
+    ColumnName sysname NOT NULL,
+    TypeName   sysname NOT NULL,
+    TypeRank   int     NOT NULL,
+    ColumnId   int     NOT NULL,
+    IsIdentity bit     NOT NULL
+)
+
+IF OBJECT_ID('tempdb..#CandidateColumn') IS NOT NULL
+    DROP TABLE #CandidateColumn
+
+CREATE TABLE #CandidateColumn
+(
+    ColumnName         sysname       NOT NULL,
+    TypeName           sysname       NOT NULL,
+    TypeRank           int           NOT NULL,
+    ColumnId           int           NOT NULL,
+    IsUnique           bit           NOT NULL,
+    DistinctCount      bigint        NULL,
+    UniquenessPercent  decimal(8, 2) NULL
 )
 
 IF OBJECT_ID('tempdb..#SuggestedKeyCols') IS NOT NULL
@@ -453,6 +490,7 @@ HeuristicColumn AS
               c.name AS ColumnName,
               rn = ROW_NUMBER() OVER (
                   ORDER BY
+                      CASE WHEN uq.ColumnId IS NOT NULL THEN 0 ELSE 1 END,
                       CASE t.name
                           WHEN ''tinyint'' THEN 1
                           WHEN ''smallint'' THEN 2
@@ -468,6 +506,29 @@ HeuristicColumn AS
             FROM __TARGET_DB__.sys.columns AS c
            INNER JOIN __TARGET_DB__.sys.types AS t
               ON t.user_type_id = c.user_type_id
+            LEFT JOIN (
+                SELECT ic.column_id AS ColumnId
+                  FROM __TARGET_DB__.sys.indexes AS i
+                 INNER JOIN __TARGET_DB__.sys.index_columns AS ic
+                    ON ic.object_id = i.object_id
+                   AND ic.index_id = i.index_id
+                 WHERE i.object_id = @ObjectId
+                   AND i.is_unique = 1
+                   AND i.is_hypothetical = 0
+                   AND i.has_filter = 0
+                   AND ic.is_included_column = 0
+                   AND ic.key_ordinal > 0
+                   AND NOT EXISTS (
+                           SELECT 1
+                             FROM __TARGET_DB__.sys.index_columns AS ic2
+                            WHERE ic2.object_id = i.object_id
+                              AND ic2.index_id = i.index_id
+                              AND ic2.is_included_column = 0
+                              AND ic2.key_ordinal > 0
+                              AND ic2.column_id <> ic.column_id
+                       )
+            ) AS uq
+              ON uq.ColumnId = c.column_id
            WHERE c.object_id = @ObjectId
              AND c.is_computed = 0
              AND c.is_identity = 0
@@ -674,6 +735,30 @@ SELECT @ObjectId = ObjectID
 
 -- Unique-index columns and leading-column stats. Catalog / DMV only; do not scan the table.
 SET @Sql = N'
+INSERT #TableColumns (ColumnName, TypeName, TypeRank, ColumnId, IsIdentity)
+SELECT
+    c.name,
+    t.name,
+    CASE t.name
+        WHEN ''tinyint'' THEN 1
+        WHEN ''smallint'' THEN 2
+        WHEN ''int'' THEN 3
+        WHEN ''bigint'' THEN 4
+        WHEN ''date'' THEN 5
+        WHEN ''datetime'' THEN 6
+        WHEN ''datetime2'' THEN 7
+        ELSE 100
+    END,
+    c.column_id,
+    c.is_identity
+  FROM __TARGET_DB__.sys.columns AS c
+ INNER JOIN __TARGET_DB__.sys.types AS t
+    ON t.user_type_id = c.user_type_id
+ WHERE c.object_id = @ObjectId
+   AND c.is_computed = 0
+   AND c.is_sparse = 0
+   AND t.name NOT IN (''text'', ''ntext'', ''image'', ''xml'')
+
 INSERT #UniqueIndexKeyCols (IndexName, ColumnName, KeyOrdinal)
 SELECT
     i.name,
@@ -762,6 +847,80 @@ BEGIN CATCH
     SET @Sql = NULL
 END CATCH
 
+-- Score existing columns for uniqueness. Catalog / stats only; do not scan the table.
+DELETE FROM #CandidateColumn
+
+INSERT #CandidateColumn
+(
+    ColumnName,
+    TypeName,
+    TypeRank,
+    ColumnId,
+    IsUnique,
+    DistinctCount,
+    UniquenessPercent
+)
+SELECT
+    tc.ColumnName,
+    tc.TypeName,
+    tc.TypeRank,
+    tc.ColumnId,
+    IsUnique = CASE
+        WHEN EXISTS (
+                 SELECT 1
+                   FROM #UniqueIndexKeyCols AS u
+                  WHERE u.ColumnName = tc.ColumnName
+                    AND NOT EXISTS (
+                            SELECT 1
+                              FROM #UniqueIndexKeyCols AS u2
+                             WHERE u2.IndexName = u.IndexName
+                               AND u2.ColumnName <> tc.ColumnName
+                        )
+             ) THEN 1
+        ELSE 0
+    END,
+    DistinctCount = (
+        SELECT TOP (1) cs.DistinctCount
+          FROM #ColumnStats AS cs
+         WHERE cs.ColumnName = tc.ColumnName
+         ORDER BY
+             CASE WHEN cs.StatsColumnCount = 1 THEN 0 ELSE 1 END,
+             CASE WHEN cs.DistinctCount IS NOT NULL THEN 0 ELSE 1 END,
+             cs.StatsRows DESC
+    ),
+    UniquenessPercent = CONVERT(decimal(8, 2), NULL)
+  FROM #TableColumns AS tc
+
+UPDATE cc
+   SET UniquenessPercent =
+           CASE
+               WHEN cc.IsUnique = 1 THEN CONVERT(decimal(8, 2), 100)
+               WHEN cc.DistinctCount IS NULL THEN NULL
+               WHEN ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) <= 0 THEN NULL
+               WHEN cc.DistinctCount * 100.0 / ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) > 100
+                   THEN CONVERT(decimal(8, 2), 100)
+               ELSE CONVERT(decimal(8, 2), cc.DistinctCount * 100.0 / ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount))
+           END
+  FROM #CandidateColumn AS cc
+ CROSS JOIN #ClusteredRecommendation AS r
+
+-- Prefer a small unique (or 90%+ unique) existing column as the heuristic fallback.
+UPDATE r
+   SET HeuristicColumn = COALESCE((
+           SELECT TOP (1) cc.ColumnName
+             FROM #CandidateColumn AS cc
+            WHERE cc.TypeRank < 100
+              AND (
+                      cc.IsUnique = 1
+                   OR cc.UniquenessPercent >= 90
+                  )
+            ORDER BY
+                CASE WHEN cc.IsUnique = 1 THEN 0 ELSE 1 END,
+                cc.TypeRank,
+                cc.ColumnId
+       ), r.HeuristicColumn)
+  FROM #ClusteredRecommendation AS r
+
 UPDATE r
    SET SuggestionSource = CASE
            WHEN r.HasClusteredIndex = 1
@@ -849,98 +1008,6 @@ UPDATE r
                   WHEN r.PrimaryKeyColumns IS NOT NULL THEN 4
                   ELSE 0 END
            + CASE WHEN ISNULL(r.AvgFragmentationPct, 0) >= 30 THEN 5 ELSE 0 END
-  FROM #ClusteredRecommendation AS r
-
-UPDATE r
-   SET Justification =
-           CASE r.SuggestionSource
-               WHEN 'IDENTITY' THEN 'Ascending identity column [' + r.IdentityColumn + '] (' + ISNULL(r.IdentityTypeName, '?')
-                    + ', seed ' + ISNULL(CONVERT(varchar(30), r.IdentitySeed), '?')
-                    + ', increment ' + ISNULL(CONVERT(varchar(30), r.IdentityIncrement), '?')
-                    + ') is the preferred narrow monotonic clustering key.'
-               WHEN 'ADD_IDENTITY' THEN 'Table has no identity column. Adding a single int IDENTITY column provides a fast ever-increasing clustering key for insert-heavy workloads.'
-               WHEN 'RECLUSTER_IDENTITY' THEN 'Table is clustered on [' + ISNULL(r.ExistingClusteredKeyColumns, '?')
-                    + ']. A single ascending identity column [' + r.IdentityColumn + '] is available and is preferred for insert locality.'
-               WHEN 'ALREADY_CLUSTERED' THEN 'Table already has clustered index [' + ISNULL(r.ExistingClusteredIndexName, '?') + '] on ('
-                    + ISNULL(r.ExistingClusteredKeyColumns, '?') + '). No change recommended unless workload analysis suggests otherwise.'
-               WHEN 'PRIMARY_KEY' THEN 'Primary key columns (' + ISNULL(r.PrimaryKeyColumns, '?')
-                    + ') should be clustered to eliminate RID lookups and stabilize nonclustered index leaf pointers.'
-               WHEN 'MISSING_INDEX' THEN 'Missing-index DMVs show sustained access patterns on these key columns (impact score '
-                    + ISNULL(CONVERT(varchar(20), CONVERT(bigint, r.MissingIndexImpact)), '0') + ').'
-               WHEN 'NC_INDEX_USAGE' THEN 'Most-used nonclustered index [' + ISNULL(r.TopNcIndexName, '?')
-                    + '] indicates lookup columns that are strong clustered-index candidates.'
-               WHEN 'HEURISTIC' THEN 'No identity, PK, or DMV signal; narrow key column selected as a fallback clustering candidate.'
-               ELSE 'Insufficient metadata to recommend a clustered index automatically.'
-           END
-         + CASE WHEN r.IdentityColumn IS NOT NULL AND r.IdentityIsAscending = 0
-                THEN ' Warning: identity increment is not positive; ascending clustering may not match insert pattern.'
-                ELSE ''
-           END
-         + CASE WHEN r.IdentityColumn IS NOT NULL AND r.IdentityIsPreferredType = 0
-                THEN ' Warning: identity type is not an integer family; consider int or bigint for a narrow clustering key.'
-                ELSE ''
-           END
-         + CASE WHEN r.ForwardedRecordCount > 0
-                THEN ' Forwarded records (' + CAST(r.ForwardedRecordCount AS varchar(20)) + ') indicate heap update pressure.'
-                ELSE ''
-           END
-         + CASE WHEN r.SuggestionSource = 'ADD_IDENTITY'
-                THEN ' Review constraints, replication, and load before adding an identity column to a populated table.'
-                ELSE ''
-           END,
-       SuggestedAlterTableDdl =
-           CASE
-               WHEN r.SuggestionSource = 'ADD_IDENTITY' THEN
-                   'ALTER TABLE ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                   + ' ADD ' + QUOTENAME(@ProposedIdentityCol) + ' int NOT NULL IDENTITY(1, 1);'
-               ELSE NULL
-           END,
-       SuggestedClusteredDdl =
-           CASE
-               WHEN r.SuggestionSource = 'ALREADY_CLUSTERED' THEN
-                   '-- No action required. Existing clustered index: '
-                   + ISNULL(r.ExistingClusteredIndexName, '?') + ' (' + ISNULL(r.ExistingClusteredKeyColumns, '?') + ')'
-               WHEN r.SuggestionSource IN ('MANUAL_REVIEW') OR NULLIF(r.SuggestedKeyColumns, '') IS NULL THEN
-                   '-- Manual review required for ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-               WHEN r.SuggestionSource = 'RECLUSTER_IDENTITY' THEN
-                   '-- Drop or rebuild existing clustered index before creating the identity-based clustered index.' + CHAR(13) + CHAR(10)
-                   + 'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
-                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
-               WHEN r.SuggestionSource = 'ADD_IDENTITY' THEN
-                   '-- Run SuggestedAlterTableDdl first, then execute:' + CHAR(13) + CHAR(10)
-                   + 'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
-                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
-               WHEN r.PrimaryKeyColumns IS NOT NULL AND r.PrimaryKeyIsUnique = 1 AND r.SuggestionSource = 'PRIMARY_KEY' THEN
-                   'CREATE UNIQUE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
-                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ');'
-               ELSE
-                   'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
-                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
-           END,
-       SuggestedNonClusteredDdl =
-           CASE
-               WHEN r.SuggestionSource IN ('ALREADY_CLUSTERED', 'MANUAL_REVIEW', 'ADD_IDENTITY', 'RECLUSTER_IDENTITY') THEN NULL
-               WHEN r.MissingIndexKeyColumns IS NOT NULL
-                AND r.MissingIndexKeyColumns <> ISNULL(r.SuggestedKeyColumns, '')
-                AND (
-                        r.SuggestionSource <> 'MISSING_INDEX'
-                     OR r.PrimaryKeyColumns IS NOT NULL
-                    )
-                   THEN 'CREATE NONCLUSTERED INDEX ' + QUOTENAME('IX_' + r.TableName + '_MissingSignal')
-                      + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
-                      + ' (' + r.MissingIndexKeyColumns + ')'
-                      + CASE
-                            WHEN NULLIF(LTRIM(RTRIM(r.MissingIndexIncludedCols)), '') IS NOT NULL
-                                THEN ' INCLUDE (' + r.MissingIndexIncludedCols + ')'
-                            ELSE ''
-                        END
-                      + ' WITH (' + @IndexWithOptionsNC + ');'
-               ELSE NULL
-           END
   FROM #ClusteredRecommendation AS r
 
 -- Uniqueness of the chosen key: unique index/PK subset, or single-column stats. No table scan.
@@ -1033,6 +1100,208 @@ UPDATE r
            END
   FROM #ClusteredRecommendation AS r
 
+-- Reject a low-cardinality first-choice key (heuristic, missing-index, NC, or non-unique PK).
+-- DistinctCount known and uniqueness poor for the table size (for example 10 values vs millions
+-- of rows, or UniquenessPercent well below 90% on a non-tiny table). A 10-row table with 10
+-- distinct values is unique and is not rejected. Identity / RECLUSTER_IDENTITY / ADD_IDENTITY /
+-- ALREADY_CLUSTERED stay. A unique PK, including a compound unique PK, stays.
+SET @IsLowCardinality = 0
+SET @AltColumn = NULL
+SET @RejectedKey = NULL
+SET @RejectedDistinct = NULL
+SET @RejectedUniqPct = NULL
+SET @TableRows = NULL
+
+SELECT
+    @TableRows = ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount),
+    @RejectedKey = REPLACE(REPLACE(ISNULL(r.SuggestedKeyColumns, ''), ' ASC', ''), ' DESC', ''),
+    @RejectedDistinct = r.DistinctCount,
+    @RejectedUniqPct = r.UniquenessPercent,
+    @IsLowCardinality = CASE
+        WHEN r.SuggestionSource IN ('IDENTITY', 'ADD_IDENTITY', 'RECLUSTER_IDENTITY', 'ALREADY_CLUSTERED')
+            THEN 0
+        WHEN r.SuggestionSource = 'PRIMARY_KEY' AND r.SuggestedKeyIsUnique = 1
+            THEN 0
+        WHEN r.SuggestionSource NOT IN ('HEURISTIC', 'MISSING_INDEX', 'NC_INDEX_USAGE', 'PRIMARY_KEY')
+            THEN 0
+        WHEN r.DistinctCount IS NULL
+            THEN 0
+        WHEN r.SuggestedKeyIsUnique = 1
+            THEN 0
+        WHEN ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) <= 0
+            THEN 0
+        WHEN r.DistinctCount >= ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount)
+            THEN 0
+        WHEN ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount) >= 100
+             AND ISNULL(r.UniquenessPercent, CONVERT(decimal(8, 2), r.DistinctCount * 100.0 / ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount))) < 90
+            THEN 1
+        WHEN r.DistinctCount <= 100
+             AND r.DistinctCount * 10 < ISNULL(NULLIF(r.RecordCount, 0), r.PartitionRowCount)
+            THEN 1
+        ELSE 0
+    END
+  FROM #ClusteredRecommendation AS r
+
+IF @IsLowCardinality = 1
+BEGIN
+    SELECT TOP (1)
+        @AltColumn = cc.ColumnName
+      FROM #CandidateColumn AS cc
+     WHERE cc.TypeRank < 100
+       AND (
+               cc.IsUnique = 1
+            OR cc.UniquenessPercent >= 90
+           )
+       AND NOT EXISTS (
+               SELECT 1
+                 FROM #SuggestedKeyCols AS s
+                WHERE s.ColumnName = cc.ColumnName
+           )
+     ORDER BY
+         CASE WHEN cc.IsUnique = 1 THEN 0 ELSE 1 END,
+         cc.TypeRank,
+         cc.ColumnId
+
+    IF @AltColumn IS NOT NULL
+    BEGIN
+        UPDATE r
+           SET SuggestionSource = 'HEURISTIC',
+               SuggestedKeyColumns = QUOTENAME(@AltColumn) + ' ASC',
+               SuggestedKeyIsUnique = cc.IsUnique,
+               DistinctCount = CASE
+                   WHEN cc.IsUnique = 1 THEN
+                       CASE
+                           WHEN r.RecordCount > 0 THEN r.RecordCount
+                           WHEN r.PartitionRowCount > 0 THEN r.PartitionRowCount
+                           ELSE ISNULL(cc.DistinctCount, 0)
+                       END
+                   ELSE cc.DistinctCount
+               END,
+               UniquenessPercent = cc.UniquenessPercent
+          FROM #ClusteredRecommendation AS r
+         INNER JOIN #CandidateColumn AS cc
+            ON cc.ColumnName = @AltColumn
+    END
+    ELSE
+    BEGIN
+        UPDATE r
+           SET SuggestionSource = 'MANUAL_REVIEW',
+               SuggestedKeyColumns = '',
+               SuggestedKeyIsUnique = 0
+          FROM #ClusteredRecommendation AS r
+    END
+END
+
+UPDATE r
+   SET Justification =
+           CASE r.SuggestionSource
+               WHEN 'IDENTITY' THEN 'Ascending identity column [' + r.IdentityColumn + '] (' + ISNULL(r.IdentityTypeName, '?')
+                    + ', seed ' + ISNULL(CONVERT(varchar(30), r.IdentitySeed), '?')
+                    + ', increment ' + ISNULL(CONVERT(varchar(30), r.IdentityIncrement), '?')
+                    + ') is the preferred narrow monotonic clustering key.'
+               WHEN 'ADD_IDENTITY' THEN 'Table has no identity column. Adding a single int IDENTITY column provides a fast ever-increasing clustering key for insert-heavy workloads.'
+               WHEN 'RECLUSTER_IDENTITY' THEN 'Table is clustered on [' + ISNULL(r.ExistingClusteredKeyColumns, '?')
+                    + ']. A single ascending identity column [' + r.IdentityColumn + '] is available and is preferred for insert locality.'
+               WHEN 'ALREADY_CLUSTERED' THEN 'Table already has clustered index [' + ISNULL(r.ExistingClusteredIndexName, '?') + '] on ('
+                    + ISNULL(r.ExistingClusteredKeyColumns, '?') + '). No change recommended unless workload analysis suggests otherwise.'
+               WHEN 'PRIMARY_KEY' THEN 'Primary key columns (' + ISNULL(r.PrimaryKeyColumns, '?')
+                    + ') should be clustered to eliminate RID lookups and stabilize nonclustered index leaf pointers.'
+               WHEN 'MISSING_INDEX' THEN 'Missing-index DMVs show sustained access patterns on these key columns (impact score '
+                    + ISNULL(CONVERT(varchar(20), CONVERT(bigint, r.MissingIndexImpact)), '0') + ').'
+               WHEN 'NC_INDEX_USAGE' THEN 'Most-used nonclustered index [' + ISNULL(r.TopNcIndexName, '?')
+                    + '] indicates lookup columns that are strong clustered-index candidates.'
+               WHEN 'HEURISTIC' THEN
+                   CASE
+                       WHEN @RejectedKey IS NOT NULL AND @IsLowCardinality = 1 THEN
+                           'First-choice key (' + @RejectedKey + ') is low-cardinality (DistinctCount '
+                           + ISNULL(CONVERT(varchar(20), @RejectedDistinct), '?')
+                           + ', UniquenessPercent '
+                           + ISNULL(CONVERT(varchar(20), @RejectedUniqPct), '?')
+                           + '). Narrow unique column selected as the clustering key.'
+                       ELSE 'No identity, PK, or DMV signal; narrow unique or high-uniqueness key column selected as a fallback clustering candidate.'
+                   END
+               ELSE
+                   CASE
+                       WHEN @IsLowCardinality = 1 THEN
+                           'First-choice key (' + ISNULL(@RejectedKey, '?') + ') is low-cardinality (DistinctCount '
+                           + ISNULL(CONVERT(varchar(20), @RejectedDistinct), '?')
+                           + ', UniquenessPercent '
+                           + ISNULL(CONVERT(varchar(20), @RejectedUniqPct), '?')
+                           + '). No unique or sufficiently unique narrow column exists. Manual review required.'
+                       ELSE 'Insufficient metadata to recommend a clustered index automatically.'
+                   END
+           END
+         + CASE WHEN r.IdentityColumn IS NOT NULL AND r.IdentityIsAscending = 0
+                THEN ' Warning: identity increment is not positive; ascending clustering may not match insert pattern.'
+                ELSE ''
+           END
+         + CASE WHEN r.IdentityColumn IS NOT NULL AND r.IdentityIsPreferredType = 0
+                THEN ' Warning: identity type is not an integer family; consider int or bigint for a narrow clustering key.'
+                ELSE ''
+           END
+         + CASE WHEN r.ForwardedRecordCount > 0
+                THEN ' Forwarded records (' + CAST(r.ForwardedRecordCount AS varchar(20)) + ') indicate heap update pressure.'
+                ELSE ''
+           END
+         + CASE WHEN r.SuggestionSource = 'ADD_IDENTITY'
+                THEN ' Review constraints, replication, and load before adding an identity column to a populated table.'
+                ELSE ''
+           END,
+       SuggestedAlterTableDdl =
+           CASE
+               WHEN r.SuggestionSource = 'ADD_IDENTITY' THEN
+                   'ALTER TABLE ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                   + ' ADD ' + QUOTENAME(@ProposedIdentityCol) + ' int NOT NULL IDENTITY(1, 1);'
+               ELSE NULL
+           END,
+       SuggestedClusteredDdl =
+           CASE
+               WHEN r.SuggestionSource = 'ALREADY_CLUSTERED' THEN
+                   '-- No action required. Existing clustered index: '
+                   + ISNULL(r.ExistingClusteredIndexName, '?') + ' (' + ISNULL(r.ExistingClusteredKeyColumns, '?') + ')'
+               WHEN r.SuggestionSource IN ('MANUAL_REVIEW') OR NULLIF(r.SuggestedKeyColumns, '') IS NULL THEN
+                   '-- Manual review required for ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+               WHEN r.SuggestionSource = 'RECLUSTER_IDENTITY' THEN
+                   '-- Drop or rebuild existing clustered index before creating the identity-based clustered index.' + CHAR(13) + CHAR(10)
+                   + 'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
+                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
+               WHEN r.SuggestionSource = 'ADD_IDENTITY' THEN
+                   '-- Run SuggestedAlterTableDdl first, then execute:' + CHAR(13) + CHAR(10)
+                   + 'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
+                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
+               WHEN r.PrimaryKeyColumns IS NOT NULL AND r.PrimaryKeyIsUnique = 1 AND r.SuggestionSource = 'PRIMARY_KEY' THEN
+                   'CREATE UNIQUE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
+                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ');'
+               ELSE
+                   'CREATE CLUSTERED INDEX ' + QUOTENAME('CX_' + r.TableName)
+                   + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                   + ' (' + r.SuggestedKeyColumns + ') WITH (' + @IndexWithOptions + ', FILLFACTOR = 90);'
+           END,
+       SuggestedNonClusteredDdl =
+           CASE
+               WHEN r.SuggestionSource IN ('ALREADY_CLUSTERED', 'MANUAL_REVIEW', 'ADD_IDENTITY', 'RECLUSTER_IDENTITY') THEN NULL
+               WHEN r.MissingIndexKeyColumns IS NOT NULL
+                AND r.MissingIndexKeyColumns <> ISNULL(r.SuggestedKeyColumns, '')
+                AND (
+                        r.SuggestionSource <> 'MISSING_INDEX'
+                     OR r.PrimaryKeyColumns IS NOT NULL
+                    )
+                   THEN 'CREATE NONCLUSTERED INDEX ' + QUOTENAME('IX_' + r.TableName + '_MissingSignal')
+                      + ' ON ' + QUOTENAME(r.SchemaName) + '.' + QUOTENAME(r.TableName)
+                      + ' (' + r.MissingIndexKeyColumns + ')'
+                      + CASE
+                            WHEN NULLIF(LTRIM(RTRIM(r.MissingIndexIncludedCols)), '') IS NOT NULL
+                                THEN ' INCLUDE (' + r.MissingIndexIncludedCols + ')'
+                            ELSE ''
+                        END
+                      + ' WITH (' + @IndexWithOptionsNC + ');'
+               ELSE NULL
+           END
+  FROM #ClusteredRecommendation AS r
+
 IF @ReturnResultSets = 1
 BEGIN
     SELECT
@@ -1044,7 +1313,7 @@ BEGIN
         PreferIdentity = @PreferIdentity,
         SuggestNewColumns = @SuggestNewColumns,
         ProposedIdentityColumn = CASE WHEN @SuggestNewColumnsOn = 1 THEN @ProposedIdentityCol ELSE NULL END,
-        Note = 'Uses existing table columns by default. Set @SuggestNewColumns = ''yes'' to allow recommending a new identity column. Uniqueness comes from unique indexes/PKs and sys.stats (no table scan). Usage stats are since instance restart. Test DDL in a maintenance window.'
+        Note = 'Uses existing table columns by default. Set @SuggestNewColumns = ''yes'' to allow recommending a new identity column. Uniqueness comes from unique indexes/PKs and sys.stats (no table scan). Low-cardinality first-choice keys are skipped when DistinctCount is known and uniqueness is poor. Usage stats are since instance restart. Test DDL in a maintenance window.'
 
     SELECT
         SchemaName,
