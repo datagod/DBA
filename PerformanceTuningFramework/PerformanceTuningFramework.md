@@ -207,7 +207,10 @@ Stored procedure that examines one user table and recommends a clustered index. 
 
 - Prioritizes an existing ascending identity column when `@PreferIdentity` is 1
 - Then considers the primary key (single-column or compound), missing-index keys, most-used nonclustered keys, and a narrow-column heuristic
-- Does not prefer a lone integer column over a compound PK, missing-index key, or NC key
+- Prefers a small unique existing column when one is available (single-column unique index or uniqueness of 90% or higher from stats)
+- If the first-choice heuristic, missing-index, NC, or non-unique PK key is low-cardinality, skips it and picks a better unique/narrow existing column. If none, `MANUAL_REVIEW` (no `CREATE CLUSTERED INDEX` on a province-style key)
+- A unique PK, including a compound unique PK, remains valid. Identity / `RECLUSTER_IDENTITY` / `ADD_IDENTITY` / `ALREADY_CLUSTERED` are unchanged
+- Does not prefer a lone integer column over a compound unique PK, missing-index key, or NC key
 - When `@SuggestNewColumns` is yes, may recommend adding a new identity column if none exists and there is no PK
 - Returns `Justification` for the chosen key, plus `SuggestedKeyIsUnique`, `DistinctCount`, and `UniquenessPercent`
 - Uniqueness comes from unique indexes/PKs and `sys.stats` / `sys.dm_db_stats_properties` (histogram on SQL Server 2016+). The table is not scanned.
@@ -241,6 +244,8 @@ Recommendation priority:
 5. Primary key (single-column or compound)
 6. Missing-index / NC usage signals
 7. Remaining identity / heuristic / manual review
+
+Low-cardinality first-choice keys (heuristic, missing-index, NC, or non-unique PK) are skipped when `DistinctCount` is known and uniqueness is poor for the table size: `UniquenessPercent` below 90% on a table of 100 or more rows, or a small `DistinctCount` (100 or fewer) versus a much larger table. A 10-row table with 10 distinct values is unique and is not rejected. The replacement is a unique or 90%+ unique narrow existing column; otherwise `MANUAL_REVIEW`.
 
 Note: usage statistics reset when the SQL Server instance restarts. `ONLINE = ON` appears in suggested DDL only on Enterprise/Developer host editions. Test generated DDL in a non-production window.
 
