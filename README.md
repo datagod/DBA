@@ -96,6 +96,7 @@ GO
 :r PerformanceTuningFramework\CheckForHeaps.sql
 :r PerformanceTuningFramework\ShowHeaps.sql
 :r PerformanceTuningFramework\ShowBackupHealth.sql
+:r PerformanceTuningFramework\ShowRestoreHealth.sql
 :r PerformanceTuningFramework\RecommendClusteredIndex.sql
 ```
 
@@ -174,6 +175,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
 | `ShowBackupHealth` | `ShowBackupHealth.sql` | Instance backup-health diagnostic: in-progress backups, last FULL/DIFF/LOG per database, backup jobs, and ranked findings |
+| `ShowRestoreHealth` | `ShowRestoreHealth.sql` | Instance restore-health diagnostic: in-progress restores, database state, last restore, restore jobs, and ranked findings |
 | `ShowAgentJobReport` | `ShowAgentJobReport.sql` | SQL Agent job/schedule/step inventory (Markdown default, TEXT optional) |
 
 ### Common workflows
@@ -232,6 +234,13 @@ EXEC dbo.ShowQueryStoreReport @TargetDatabase = N'YourDatabase', @SortBy = 'CPU'
 ```sql
 EXEC dbo.ShowBackupHealth;
 EXEC dbo.ShowBackupHealth @LongRunningMinutes = 30, @FullMaxHours = 24;
+```
+
+**Restore health**
+
+```sql
+EXEC dbo.ShowRestoreHealth;
+EXEC dbo.ShowRestoreHealth @DatabaseFilter = N'YourDatabase%', @MorningHours = 12;
 ```
 
 **SQL Agent job inventory**
