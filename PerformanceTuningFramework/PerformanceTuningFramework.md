@@ -594,6 +594,67 @@ Finding types:
 
 Note: Last-backup times use a 400-day `backupset` lookback so an old FULL still appears as a date rather than as missing. Negative thresholds are converted with `ABS` (zero falls back to the default). Review Findings first; compression, striping, `BUFFERCOUNT`, and `MAXTRANSFERSIZE` are next-run tuning, not the first step on a 24-hour DIFF.
 
+### ShowRestoreHealth
+
+File: `ShowRestoreHealth.sql`
+
+Stored procedure that examines **instance restore health** and returns ranked problems with suggested actions. Complements `ShowBackupHealth` (backup-only). Does not replace `Procedures/ShowBackups.sql`, `Procedures/ShowBackupsInProgress`, or `ShowBackupHealth`. `ShowJobHistory` / `ShowRunningJobs` / `ShowAgentJobReport` remain generic. Requires SQL Server 2012 (11.x) or later. Does not persist results to a table. Does not scan user tables.
+
+- Reports every in-progress request whose command contains `RESTORE`, including elapsed time, `percent_complete`, waits, blocker login/program, SQL Agent job name (from `program_name` hex), and command text
+- Reports database state for matching user databases (`state_desc`, `is_in_standby`, `user_access_desc`) plus last `restore_date` / restore type from `msdb.dbo.restorehistory`
+- Reports last restore per database from `restorehistory` + `restorefile` + `backupset` + `backupmediafamily` (restore date, type, source backup finish, device, destination file list, duration when a matching restore job finish is within 15 minutes)
+- Lists Agent jobs whose step command contains `RESTORE`, with last run, current run, and next run
+- Ranks findings: long/stalled/blocked restores, databases left RESTORING / RECOVERY_PENDING / SUSPECT / OFFLINE, failed or long-running restore jobs, missed morning restores, and stale or missing source FULL backups
+- Interprets waits (`BACKUPIO` / `ASYNC_IO_COMPLETION` = source backup file; `LCK_%` = exclusive access / blocker; `PREEMPTIVE_OS_*` = OS/network)
+- Does not recommend `KILL` while a restore is progressing; a killed restore leaves the database RESTORING and must be restarted
+- Parses `RESTORE DATABASE` / `RESTORE LOG` targets from SQL text and job commands; a token that starts with `@` is treated as a parameter, not a database name
+
+Deployment:
+
+```sql
+-- Run ShowRestoreHealth.sql in the tool database
+EXEC dbo.ShowRestoreHealth
+EXEC dbo.ShowRestoreHealth @DatabaseFilter = N'YourDatabase%', @MorningHours = 12
+EXEC dbo.ShowRestoreHealth @LongRunningMinutes = 30, @HistoryDays = 14
+```
+
+Parameters:
+
+- `@DatabaseFilter` — database name filter, supports LIKE patterns (default `%`)
+- `@HistoryDays` — lookback for restore-job failures (default `14`)
+- `@LongRunningMinutes` — in-progress restore or restore job duration that is considered long (default `60`)
+- `@MorningHours` — last successful restore older than this, when a restore job or restore history exists, raises `NO_MORNING_RESTORE` (default `12`)
+- `@IncludeSystem` — `1` = include `master`/`model`/`msdb` (`tempdb` is always skipped) (default `0`)
+- `@ReturnResultSets` — return the six result sets (default `1`)
+
+Result sets:
+
+1. Summary (capture time, server, running restore count, high-priority finding count, filters)
+2. InProgress
+3. DatabaseState
+4. LastRestore
+5. RestoreJobs
+6. Findings
+
+Finding types:
+
+| Type | Meaning |
+|------|---------|
+| `RESTORE_RUNNING_LONG` | In-progress restore older than `@LongRunningMinutes` (severity 3 if >= 4 hours) |
+| `RESTORE_STALLED` | In-progress restore at 0% for 30+ minutes, or long-running with a `BACKUPIO` / `ASYNC_IO_COMPLETION` wait |
+| `RESTORE_BLOCKED` | In-progress restore waiting on `LCK_%` or a blocker session; names the blocker |
+| `DATABASE_LEFT_RESTORING` | Database is `RESTORING`, not standby, and no restore session is running |
+| `DATABASE_RECOVERY_PENDING` | Database is `RECOVERY_PENDING` |
+| `DATABASE_SUSPECT` | Database is `SUSPECT` |
+| `DATABASE_OFFLINE` | Database is `OFFLINE` (severity 3 when it has restore history or a restore job) |
+| `RESTORE_JOB_FAILED` | Last restore-job outcome failed (`sysjobhistory run_status = 0`) within `@HistoryDays`; includes step message when present |
+| `RESTORE_JOB_RUNNING_LONG` | Restore-related Agent job running longer than `@LongRunningMinutes` |
+| `NO_MORNING_RESTORE` | Restore job or restore history exists, and the last successful restore is older than `@MorningHours` (skipped while a restore is running) |
+| `SOURCE_BACKUP_STALE_OR_MISSING` | Restore job or restore history exists, and the last non-copy-only FULL is missing or older than 36 hours |
+
+Note: Last-restore and last-FULL times use a 400-day `restorehistory` / `backupset` lookback. Negative thresholds are converted with `ABS` (zero falls back to the default). Review Findings first. `ShowBackupHealth` remains the backup exam.
+
+
 ### ShowAgentJobReport
 
 File: `ShowAgentJobReport.sql`
