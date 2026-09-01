@@ -473,7 +473,7 @@ END
 SET @Sql = N'
 UPDATE vl
    SET Definition  = m.definition,
-       IsEncrypted = CONVERT(bit, OBJECTPROPERTY(m.object_id, ''IsEncrypted''))
+       IsEncrypted = CASE WHEN m.definition IS NULL THEN CONVERT(bit, 1) ELSE CONVERT(bit, 0) END
   FROM #ViewList AS vl
  INNER JOIN __TARGET_DB__.sys.sql_modules AS m
     ON m.object_id = vl.ObjectId
