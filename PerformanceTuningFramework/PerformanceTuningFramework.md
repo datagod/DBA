@@ -287,7 +287,7 @@ Stored procedure that decodes one view in a target database and recursively inli
 - Resolves the starting view (`schema.view` or `@SchemaName` plus view name) and errors if the database or view does not exist
 - Walks nested views in that database from `sys.sql_expression_dependencies` (JOIN / FROM / APPLY / CTE references, not only the SELECT list)
 - Detects circular references and stops walking that path so the procedure does not hang
-- Captures each definition from `sys.sql_modules.definition`, strips `CREATE VIEW ... AS`, and token-replaces nested view names with `(nested body) AS [ViewName]` (longest name first, max depth 20)
+- Captures each definition from `sys.sql_modules.definition`, strips `CREATE VIEW ... AS`, and inlines nested views leaves-first (deepest first, once) as `(nested body) AS [ViewName]`. Does not re-scan already-expanded SQL. Caps expansion at 8 MB and 2000 replacements
 - Leaves base tables as names; does not execute the expanded SQL; does not scan user tables
 - If a reference cannot be replaced safely, the view name is kept and listed as Unexpanded
 
@@ -315,7 +315,7 @@ Result sets:
 5. Referenced base tables remaining after expansion (`schema.table`)
 6. Unexpanded view names, if any
 
-Note: expansion is a token replace of two-part names (`schema.view`, `[schema].[view]`, `dbo.view`, and `[view]` when unambiguous). Encrypted modules have no text to inline. Cross-database and three-part `database.schema.view.column` references are not rewritten as subqueries.
+Note: expansion substitutes two-part names (`schema.view`, `[schema].[view]`, `schema.[view]`, `[schema].view`, and `[view]` when unambiguous) leaves-first, once per nested view. Encrypted modules have no text to inline. Circular references are not inlined. Cross-database and three-part `database.schema.view.column` references are not rewritten as subqueries.
 
 ### AnalyzeIndexes
 
