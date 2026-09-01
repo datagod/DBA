@@ -278,6 +278,45 @@ Parameters:
 
 Note: fragmentation is collected with `sys.dm_db_index_physical_stats` in LIMITED mode for the specified table only.
 
+### ShowExpandedView
+
+File: `ShowExpandedView.sql`
+
+Stored procedure that decodes one view in a target database and recursively inlines nested view definitions so the entire query can be inspected. Requires SQL Server 2008 (10.x) or later on the instance and compatibility level 100 or higher on the target database.
+
+- Resolves the starting view (`schema.view` or `@SchemaName` plus view name) and errors if the database or view does not exist
+- Walks nested views in that database from `sys.sql_expression_dependencies` (JOIN / FROM / APPLY / CTE references, not only the SELECT list)
+- Detects circular references and stops walking that path so the procedure does not hang
+- Captures each definition from `sys.sql_modules.definition`, strips `CREATE VIEW ... AS`, and token-replaces nested view names with `(nested body) AS [ViewName]` (longest name first, max depth 20)
+- Leaves base tables as names; does not execute the expanded SQL; does not scan user tables
+- If a reference cannot be replaced safely, the view name is kept and listed as Unexpanded
+
+Deployment:
+
+```sql
+-- Run ShowExpandedView.sql in the tool database
+EXEC dbo.ShowExpandedView @TargetDatabase = N'YourDatabase', @ViewName = N'vLargeReport'
+EXEC dbo.ShowExpandedView @TargetDatabase = N'YourDatabase', @ViewName = N'Sales.vOrders'
+```
+
+Parameters:
+
+- `@TargetDatabase` — database that contains the view (default: current database)
+- `@ViewName` — view name, or `schema.view`
+- `@SchemaName` — schema when `@ViewName` has no qualifier (default `dbo`)
+- `@ReturnResultSets` — return the six result sets (default `1`)
+
+Result sets:
+
+1. Summary (database, root view, nested view count, max depth, cycle flag, note)
+2. View tree (`Depth`, `SchemaName`, `ViewName`, `ReferencedBy`, `ObjectId`)
+3. Definitions (original `CREATE` text from `sys.sql_modules`)
+4. `ExpandedSql` (one `nvarchar(max)` column: the fully inlined query)
+5. Referenced base tables remaining after expansion (`schema.table`)
+6. Unexpanded view names, if any
+
+Note: expansion is a token replace of two-part names (`schema.view`, `[schema].[view]`, `dbo.view`, and `[view]` when unambiguous). Encrypted modules have no text to inline. Cross-database and three-part `database.schema.view.column` references are not rewritten as subqueries.
+
 ### AnalyzeIndexes
 
 File: `AnalyzeIndexes.sql`
