@@ -1,3 +1,4 @@
+
 /*
   ShowQueryStoreWorkloadReport.sql
   Performance Tuning Framework
@@ -646,3 +647,15 @@ IF OBJECT_ID('dbo.ShowQueryStoreWorkloadReport') IS NOT NULL
 ELSE
     PRINT 'Procedure ShowQueryStoreWorkloadReport NOT created.'
 GO
+
+/*
+exec dbo.ShowQueryStoreWorkloadReport
+    @DaysBack               = 7,
+    @MinExecutions          = 1,
+    @DatabaseFilter         = '%',
+    @IncludeSystemDatabases = 0,
+    @TopN                   = 100,
+    @SortBy                 = 'EXECUTIONS',
+    @ReportWidth            = 120
+
+*/
