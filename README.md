@@ -163,6 +163,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `ShowHeaps` | `ShowHeaps.sql` | Full heap DMV analysis with clustered-index DDL |
 | `RecommendClusteredIndex` | `RecommendClusteredIndex.sql` | Single-table clustered index recommendation with uniqueness and Justification; prefers a small unique column; rejects low-cardinality keys; identity/PK/missing-index/NC paths; `@SuggestNewColumns` default `no` uses existing columns only |
 | `ShowTableInfo` | `ShowTableInfo.sql` | Single-table size, indexes, fragmentation, columns, constraints, stats |
+| `ShowExpandedView` | `ShowExpandedView.sql` | Decode a view and nested views into one inlined query for troubleshooting |
 | `ExamineQueryStore` | `ExamineQueryStore.sql` | Deep Query Store analysis with prioritized findings |
 | `ShowQueryStoreReport` | `ShowQueryStoreReport.sql` | Query Store report for one database |
 | `ShowQueryStoreWorkloadReport` | `ShowQueryStoreWorkloadReport.sql` | Instance-wide Query Store workload scan |
@@ -191,6 +192,18 @@ EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase', @SortBy = 'READ
 
 ```sql
 EXEC dbo.ShowTableInfo @TargetDatabase = N'YourDatabase', @TableName = N'YourTable';
+```
+
+**Expand a nested view**
+
+```sql
+EXEC dbo.ShowExpandedView
+     @TargetDatabase = N'YourDatabase',
+     @ViewName       = N'vLargeReport';
+
+EXEC dbo.ShowExpandedView
+     @TargetDatabase = N'YourDatabase',
+     @ViewName       = N'Sales.vOrders';
 ```
 
 **Heap remediation**
