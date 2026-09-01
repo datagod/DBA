@@ -47,6 +47,9 @@ AS
 --               Walks JOIN/FROM/APPLY/CTE view references via sys.sql_expression_dependencies.
 --               Detects circular references. Does not execute the expanded SQL. Does not scan
 --               user tables. Requires SQL Server 2008 (10.x) or later.
+-- Date Revised: September 1, 2026
+-- Reason:       Stop runaway expansion. Inline nested views leaves-first once; never UPPER()
+--               the full nvarchar(max); cap body size and STUFF replacements.
 ---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
@@ -62,7 +65,8 @@ DECLARE
     @ParsedView             sysname,
     @HasCircularReference   bit,
     @HitMaxWalkDepth        bit,
-    @HitMaxExpandPass       bit,
+    @HitSizeCap             bit,
+    @HitReplacementCap      bit,
     @NestedViewCount        int,
     @MaxDepth               int,
     @Note                   nvarchar(2000),
@@ -81,9 +85,11 @@ DECLARE
     @Already                bit,
     @IsCycle                bit,
     @KidId                  int,
-    @Pass                   int,
-    @MaxPass                int,
-    @Replacements           int,
+    @MaxBodyBytes           int,
+    @MaxReplacements        int,
+    @TotalReplacements      int,
+    @HostId                 int,
+    @HostBody               nvarchar(max),
     @Needle                 nvarchar(1000),
     @Replacement            nvarchar(max),
     @Inline                 nvarchar(max),
@@ -109,7 +115,6 @@ DECLARE
     @i                      int,
     @c                      nchar(1),
     @c2                     nvarchar(2),
-    @NameLen                int,
     @IsUnambiguous          bit,
     @InCycle                bit,
     @IsEncrypted            bit,
@@ -178,8 +183,11 @@ END
 
 SET @HasCircularReference = 0
 SET @HitMaxWalkDepth      = 0
-SET @HitMaxExpandPass     = 0
-SET @MaxPass              = 20
+SET @HitSizeCap           = 0
+SET @HitReplacementCap    = 0
+SET @MaxBodyBytes         = 8 * 1024 * 1024
+SET @MaxReplacements      = 2000
+SET @TotalReplacements    = 0
 
 IF OBJECT_ID('tempdb..#CatalogViews') IS NOT NULL DROP TABLE #CatalogViews
 IF OBJECT_ID('tempdb..#CatalogViewDeps') IS NOT NULL DROP TABLE #CatalogViewDeps
@@ -191,6 +199,7 @@ IF OBJECT_ID('tempdb..#CycleEdges') IS NOT NULL DROP TABLE #CycleEdges
 IF OBJECT_ID('tempdb..#BaseTables') IS NOT NULL DROP TABLE #BaseTables
 IF OBJECT_ID('tempdb..#Unexpanded') IS NOT NULL DROP TABLE #Unexpanded
 IF OBJECT_ID('tempdb..#Needles') IS NOT NULL DROP TABLE #Needles
+IF OBJECT_ID('tempdb..#ExpandOrder') IS NOT NULL DROP TABLE #ExpandOrder
 
 CREATE TABLE #CatalogViews
 (
@@ -273,6 +282,12 @@ CREATE TABLE #Needles
     NeedleId int            NOT NULL IDENTITY(1, 1) PRIMARY KEY,
     Needle   nvarchar(1000) NOT NULL,
     Taken    bit            NOT NULL
+)
+
+CREATE TABLE #ExpandOrder
+(
+    ObjectId int NOT NULL PRIMARY KEY,
+    Taken    bit NOT NULL
 )
 
 SET @Sql = N'
@@ -760,7 +775,7 @@ BEGIN
         SET @Body = SUBSTRING(@Body, 1, DATALENGTH(@Body) / 2 - 1)
     END
 
-    SET @Chk = PATINDEX(N'%WITH CHECK OPTION%', UPPER(@Body))
+    SET @Chk = PATINDEX(N'%WITH CHECK OPTION%', @Body COLLATE Latin1_General_CI_AS)
     IF @Chk > 0
     BEGIN
         SET @Tail = LTRIM(RTRIM(SUBSTRING(@Body, @Chk + 17, 40)))
@@ -783,86 +798,123 @@ UPDATE #ViewList
    SET Body = NULL
  WHERE IsEncrypted = 1
 
-SELECT @RootBody = Body
+-- Leaves-first, one pass. Deepest nested views first (MinDepth DESC, then name
+-- length DESC). For each nested view v, replace references in every other view
+-- body (including root). After v has been substituted into a host, leftover
+-- mentions become [ViewName]; do not paste v.Body again. Never UPPER() the
+-- full nvarchar(max). Then ExpandedSql is the root Body.
+INSERT #ExpandOrder (ObjectId, Taken)
+SELECT
+    ObjectId,
+    0
   FROM #ViewList
- WHERE IsRoot = 1
+ WHERE IsRoot = 0
+   AND Body IS NOT NULL
+   AND InCycle = 0
 
-SET @ExpandedSql = @RootBody
-
--- Token-replace nested view references, longest name first, up to 20 passes.
-SET @Pass = 0
-SET @Replacements = 1
-
-WHILE @Pass < @MaxPass AND @Replacements > 0 AND @ExpandedSql IS NOT NULL
+WHILE EXISTS (SELECT 1 FROM #ExpandOrder WHERE Taken = 0)
+  AND @HitSizeCap = 0
+  AND @HitReplacementCap = 0
 BEGIN
-    SET @Pass = @Pass + 1
-    SET @Replacements = 0
-    SET @Oid = NULL
-    SET @NameLen = NULL
+    SELECT TOP (1)
+        @Oid           = v.ObjectId,
+        @CurrentSchema = v.SchemaName,
+        @CurrentView   = v.ViewName,
+        @Body          = v.Body
+      FROM #ExpandOrder AS e
+     INNER JOIN #ViewList AS v
+        ON v.ObjectId = e.ObjectId
+     WHERE e.Taken = 0
+     ORDER BY v.MinDepth DESC,
+              LEN(v.SchemaName) + LEN(v.ViewName) DESC,
+              LEN(v.ViewName) DESC,
+              v.ObjectId
+
+    UPDATE #ExpandOrder
+       SET Taken = 1
+     WHERE ObjectId = @Oid
+
+    IF @Body IS NULL
+        CONTINUE
+
+    IF DATALENGTH(@Body) > @MaxBodyBytes
+    BEGIN
+        SET @HitSizeCap = 1
+        CONTINUE
+    END
+
+    SET @IsUnambiguous = CASE
+                             WHEN (
+                                 SELECT COUNT(*)
+                                   FROM #ViewList AS x
+                                  WHERE x.ViewName = @CurrentView
+                             ) = 1
+                             THEN 1
+                             ELSE 0
+                         END
+
+    SET @Inline = N'(' + @Body + N') AS ' + QUOTENAME(@CurrentView)
+    SET @Alias  = QUOTENAME(@CurrentView)
+
+    IF DATALENGTH(@Inline) > @MaxBodyBytes
+    BEGIN
+        SET @HitSizeCap = 1
+        CONTINUE
+    END
+
+    DELETE FROM #Needles
+
+    INSERT #Needles (Needle, Taken)
+    VALUES (QUOTENAME(@CurrentSchema) + N'.' + QUOTENAME(@CurrentView), 0)
+
+    INSERT #Needles (Needle, Taken)
+    VALUES (@CurrentSchema + N'.' + QUOTENAME(@CurrentView), 0)
+
+    INSERT #Needles (Needle, Taken)
+    VALUES (QUOTENAME(@CurrentSchema) + N'.' + @CurrentView, 0)
+
+    INSERT #Needles (Needle, Taken)
+    VALUES (@CurrentSchema + N'.' + @CurrentView, 0)
+
+    IF @IsUnambiguous = 1
+        INSERT #Needles (Needle, Taken)
+        VALUES (QUOTENAME(@CurrentView), 0)
+
+    SET @HostId = 0
 
     WHILE EXISTS (
-        SELECT 1
-          FROM #ViewList
-         WHERE IsRoot = 0
-           AND Body IS NOT NULL
-           AND InCycle = 0
-           AND (
-                    @Oid IS NULL
-                 OR LEN(SchemaName) + LEN(ViewName) < @NameLen
-                 OR (LEN(SchemaName) + LEN(ViewName) = @NameLen AND ObjectId > @Oid)
-               )
-    )
+            SELECT 1
+              FROM #ViewList
+             WHERE ObjectId <> @Oid
+               AND Body IS NOT NULL
+               AND ObjectId > @HostId
+          )
+      AND @HitSizeCap = 0
+      AND @HitReplacementCap = 0
     BEGIN
         SELECT TOP (1)
-            @Oid           = ObjectId,
-            @CurrentSchema = SchemaName,
-            @CurrentView   = ViewName,
-            @Body          = Body,
-            @NameLen       = LEN(SchemaName) + LEN(ViewName)
+            @HostId   = ObjectId,
+            @HostBody = Body
           FROM #ViewList
-         WHERE IsRoot = 0
+         WHERE ObjectId <> @Oid
            AND Body IS NOT NULL
-           AND InCycle = 0
-           AND (
-                    @Oid IS NULL
-                 OR LEN(SchemaName) + LEN(ViewName) < @NameLen
-                 OR (LEN(SchemaName) + LEN(ViewName) = @NameLen AND ObjectId > @Oid)
-               )
-         ORDER BY LEN(SchemaName) + LEN(ViewName) DESC, ObjectId
+           AND ObjectId > @HostId
+         ORDER BY ObjectId
 
-        SET @IsUnambiguous = CASE
-                                 WHEN (
-                                     SELECT COUNT(*)
-                                       FROM #ViewList AS x
-                                      WHERE x.ViewName = @CurrentView
-                                 ) = 1
-                                 THEN 1
-                                 ELSE 0
-                             END
+        IF DATALENGTH(@HostBody) > @MaxBodyBytes
+        BEGIN
+            SET @HitSizeCap = 1
+            BREAK
+        END
 
-        SET @Inline    = N'(' + @Body + N') AS ' + QUOTENAME(@CurrentView)
-        SET @Alias     = QUOTENAME(@CurrentView)
         SET @DidInline = 0
 
-        DELETE FROM #Needles
-
-        INSERT #Needles (Needle, Taken)
-        VALUES (QUOTENAME(@CurrentSchema) + N'.' + QUOTENAME(@CurrentView), 0)
-
-        INSERT #Needles (Needle, Taken)
-        VALUES (QUOTENAME(@CurrentSchema) + N'.' + @CurrentView, 0)
-
-        INSERT #Needles (Needle, Taken)
-        VALUES (@CurrentSchema + N'.' + QUOTENAME(@CurrentView), 0)
-
-        INSERT #Needles (Needle, Taken)
-        VALUES (@CurrentSchema + N'.' + @CurrentView, 0)
-
-        IF @IsUnambiguous = 1
-            INSERT #Needles (Needle, Taken)
-            VALUES (QUOTENAME(@CurrentView), 0)
+        UPDATE #Needles
+           SET Taken = 0
 
         WHILE EXISTS (SELECT 1 FROM #Needles WHERE Taken = 0)
+          AND @HitSizeCap = 0
+          AND @HitReplacementCap = 0
         BEGIN
             SELECT TOP (1)
                 @KidId  = NeedleId,
@@ -883,15 +935,18 @@ BEGIN
 
             WHILE 1 = 1
             BEGIN
-                SET @Found = CHARINDEX(UPPER(@Needle), UPPER(@ExpandedSql), @SearchFrom)
+                IF @HitSizeCap = 1 OR @HitReplacementCap = 1
+                    BREAK
+
+                SET @Found = CHARINDEX(@Needle, @HostBody COLLATE Latin1_General_CI_AS, @SearchFrom)
                 IF @Found IS NULL OR @Found = 0
                     BREAK
 
                 SET @Before = CASE
                                   WHEN @Found = 1 THEN N' '
-                                  ELSE SUBSTRING(@ExpandedSql, @Found - 1, 1)
+                                  ELSE SUBSTRING(@HostBody, @Found - 1, 1)
                               END
-                SET @After = SUBSTRING(@ExpandedSql, @Found + @NeedleLen, 1)
+                SET @After = SUBSTRING(@HostBody, @Found + @NeedleLen, 1)
 
                 SET @IsIdentBefore = CASE
                                          WHEN @Before LIKE N'[A-Za-z0-9_@#$]' THEN 1
@@ -907,21 +962,22 @@ BEGIN
                                     ELSE 0
                                 END
 
-                -- Do not treat already-inlined aliases as a new reference.
-                IF @SkipThis = 0 AND LEFT(@Needle, 1) = N'[' AND CHARINDEX(N'.', @Needle) = 0
+                -- Skip already-inlined aliases (AS [ViewName]) and [ViewName].col.
+                IF @SkipThis = 0
+                   AND @Needle COLLATE Latin1_General_CI_AS = @Alias COLLATE Latin1_General_CI_AS
                 BEGIN
                     IF @After = N'.'
                         SET @SkipThis = 1
 
                     SET @k = @Found - 1
-                    WHILE @k >= 1 AND SUBSTRING(@ExpandedSql, @k, 1) IN (N' ', NCHAR(9), NCHAR(10), NCHAR(13))
+                    WHILE @k >= 1 AND SUBSTRING(@HostBody, @k, 1) IN (N' ', NCHAR(9), NCHAR(10), NCHAR(13))
                         SET @k = @k - 1
 
                     IF @k >= 2
-                       AND UPPER(SUBSTRING(@ExpandedSql, @k - 1, 2)) = N'AS'
+                       AND SUBSTRING(@HostBody, @k - 1, 2) COLLATE Latin1_General_CI_AS = N'AS'
                        AND (
                                 @k = 2
-                             OR SUBSTRING(@ExpandedSql, @k - 2, 1) NOT LIKE N'[A-Za-z0-9_]'
+                             OR SUBSTRING(@HostBody, @k - 2, 1) NOT LIKE N'[A-Za-z0-9_]'
                            )
                         SET @SkipThis = 1
                 END
@@ -932,41 +988,58 @@ BEGIN
                     CONTINUE
                 END
 
-                IF @After = N'.' AND CHARINDEX(N'.', @Needle) > 0
+                -- schema.view.column is not a table source; skip until substituted.
+                IF @DidInline = 0
+                   AND @After = N'.'
+                   AND CHARINDEX(N'.', @Needle) > 0
                 BEGIN
-                    IF @DidInline = 1
-                       OR EXISTS (SELECT 1 FROM #ViewList WHERE ObjectId = @Oid AND ReplacedCount > 0)
-                    BEGIN
-                        SET @Replacement = @Alias
-                        SET @ReplLen = DATALENGTH(@Replacement) / 2
-                        SET @ExpandedSql = STUFF(@ExpandedSql, @Found, @NeedleLen, @Replacement)
-                        SET @Replacements = @Replacements + 1
-                        SET @SearchFrom = @Found + @ReplLen
-                    END
-                    ELSE
-                    BEGIN
-                        SET @SearchFrom = @Found + 1
-                    END
+                    SET @SearchFrom = @Found + 1
                     CONTINUE
                 END
 
-                SET @Replacement = @Inline
+                -- First table-source match in this host: (v.Body) AS [ViewName].
+                -- After that, leftover mentions become just [ViewName].
+                IF @DidInline = 1
+                    SET @Replacement = @Alias
+                ELSE
+                BEGIN
+                    SET @Replacement = @Inline
+                    SET @DidInline = 1
+
+                    UPDATE #ViewList
+                       SET ReplacedCount = ReplacedCount + 1
+                     WHERE ObjectId = @Oid
+                END
+
                 SET @ReplLen = DATALENGTH(@Replacement) / 2
-                SET @ExpandedSql = STUFF(@ExpandedSql, @Found, @NeedleLen, @Replacement)
-                SET @DidInline = 1
-                SET @Replacements = @Replacements + 1
+                SET @HostBody = STUFF(@HostBody, @Found, @NeedleLen, @Replacement)
+                SET @TotalReplacements = @TotalReplacements + 1
                 SET @SearchFrom = @Found + @ReplLen
 
-                UPDATE #ViewList
-                   SET ReplacedCount = ReplacedCount + 1
-                 WHERE ObjectId = @Oid
+                IF DATALENGTH(@HostBody) > @MaxBodyBytes
+                    SET @HitSizeCap = 1
+
+                IF @TotalReplacements >= @MaxReplacements
+                    SET @HitReplacementCap = 1
             END
         END
-    END
 
-    IF @Pass = @MaxPass AND @Replacements > 0
-        SET @HitMaxExpandPass = 1
+        UPDATE #ViewList
+           SET Body = @HostBody
+         WHERE ObjectId = @HostId
+    END
 END
+
+SELECT @RootBody = Body
+  FROM #ViewList
+ WHERE IsRoot = 1
+
+SET @ExpandedSql = @RootBody
+
+IF @ExpandedSql IS NOT NULL
+   AND DATALENGTH(@ExpandedSql) > @MaxBodyBytes
+    SET @HitSizeCap = 1
+
 
 -- Nested views that were not safely inlined.
 SET @Oid = NULL
@@ -996,11 +1069,11 @@ BEGIN
 
     IF @ExpandedSql IS NOT NULL
     BEGIN
-        IF CHARINDEX(UPPER(QUOTENAME(@CurrentSchema) + N'.' + QUOTENAME(@CurrentView)), UPPER(@ExpandedSql)) > 0
-           OR CHARINDEX(UPPER(@CurrentSchema + N'.' + @CurrentView), UPPER(@ExpandedSql)) > 0
+        IF CHARINDEX(QUOTENAME(@CurrentSchema) + N'.' + QUOTENAME(@CurrentView), @ExpandedSql COLLATE Latin1_General_CI_AS) > 0
+           OR CHARINDEX(@CurrentSchema + N'.' + @CurrentView, @ExpandedSql COLLATE Latin1_General_CI_AS) > 0
             SET @StillPresent = 1
         ELSE IF @DidInline = 0
-            AND CHARINDEX(UPPER(QUOTENAME(@CurrentView)), UPPER(@ExpandedSql)) > 0
+            AND CHARINDEX(QUOTENAME(@CurrentView), @ExpandedSql COLLATE Latin1_General_CI_AS) > 0
             SET @StillPresent = 1
     END
 
@@ -1012,8 +1085,10 @@ BEGIN
         SET @Reason = N'Reference could not be replaced safely'
     ELSE IF @StillPresent = 1
         SET @Reason = N'Partial expansion; a two-part name remains'
-    ELSE IF @HitMaxExpandPass = 1 AND @DidInline = 0
-        SET @Reason = N'Max expansion depth (20) reached'
+    ELSE IF @HitSizeCap = 1 AND @DidInline = 0
+        SET @Reason = N'Expansion truncated (size cap)'
+    ELSE IF @HitReplacementCap = 1 AND @DidInline = 0
+        SET @Reason = N'Expansion truncated (replacement cap)'
 
     IF @Reason IS NOT NULL
         INSERT #Unexpanded (SchemaName, ViewName, Reason)
@@ -1047,8 +1122,14 @@ IF @HasCircularReference = 1
     SET @Note = @Note + N' Circular reference(s) were detected and those views were not inlined'
               + CASE WHEN @CycleList = N'' THEN N'.' ELSE N': ' + @CycleList + N'.' END
 
-IF @HitMaxWalkDepth = 1 OR @HitMaxExpandPass = 1
-    SET @Note = @Note + N' Stopped at max depth 20.'
+IF @HitMaxWalkDepth = 1
+    SET @Note = @Note + N' Stopped at max walk depth 20.'
+
+IF @HitSizeCap = 1
+    SET @Note = @Note + N' Expansion was truncated because the SQL exceeded 8 MB.'
+
+IF @HitReplacementCap = 1
+    SET @Note = @Note + N' Expansion was truncated after 2000 replacements.'
 
 IF EXISTS (SELECT 1 FROM #Unexpanded)
     SET @Note = @Note + N' One or more views remain in Unexpanded.'
