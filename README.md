@@ -409,7 +409,7 @@ Standalone scripts in `Queries/` for one-off investigation (not wrapped as proce
 | Recent poor-performing queries | `RecentPoorPerformingQueries.sql` |
 | Linked server tables | `ShowLinkedServerTables` |
 | Recovery model stats | `RecoveryStats` |
-| Decode imported SQL Trace events | `ShowDecodedTrace.sql` |
+| Decode a generic imported SQL Trace table (set @TraceTable) | `ShowDecodedTrace.sql` |
 
 ---
 
