@@ -127,7 +127,7 @@ EXEC dbo.RecommendClusteredIndex
 
 ```
 DBA/
-├── docs/                          # Documentation assets (README header image)
+├── docs/                          # Docs + ProcedureHeaderTemplate.sql (Now-style header/changelog scaffold)
 ├── PerformanceTuningFramework/    # Performance diagnostics suite
 ├── Procedures/                    # General-purpose stored procedures
 ├── Functions/                     # User-defined functions
