@@ -338,7 +338,7 @@ function Send-TeamsWebhook {
 #------------------------------------------------------------------------------
 
 if ([string]::IsNullOrWhiteSpace($TeamsWebhookUrl) -and -not $WhatIfPreference) {
-    throw 'Set \$WebhookUrl in the CONFIG block (or pass -TeamsWebhookUrl / TEAMS_WEBHOOK_URL).'
+    throw 'Set $WebhookUrl in the CONFIG block (or pass -TeamsWebhookUrl / TEAMS_WEBHOOK_URL).'
 }
 
 $sqlText = Get-SqlQueryText
