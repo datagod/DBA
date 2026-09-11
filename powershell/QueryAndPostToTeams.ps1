@@ -7,6 +7,10 @@
   Intended for a workstation that can reach SQL Server and the Teams Workflows webhook URL
   (HTTPS). Does not use Database Mail / SMTP, so it still works when outbound mail is broken.
 
+  Edit the CONFIG values below (SQLServerInstance, Database, UserId, WebhookUrl). PowerShell
+  requires param() before any other code, so CONFIG sits immediately under the param block.
+  Command-line parameters override CONFIG when supplied.
+
   Create the webhook in Teams: channel ... -> Workflows -> "Send webhook alerts to a channel"
   (or "Post to a channel when a webhook request is received"). Copy the URL.
 
@@ -14,68 +18,36 @@
   (or -QueryFile) for any other check. By default a Teams message is posted only when the
   result set has at least one row (use -AlwaysPost to send even when empty).
 
-.PARAMETER ServerInstance
-  SQL Server instance (e.g. SQLPROD01 or SQLPROD01\INST1).
-
-.PARAMETER Database
-  Database context for the query. Default: DBA (tool database).
-
-.PARAMETER SqlLogin
-  SQL authentication login name.
-
-.PARAMETER SqlPassword
-  SQL authentication password as SecureString. Prefer:
-    -SqlPassword (Read-Host -AsSecureString -Prompt 'SQL password')
-
-.PARAMETER TeamsWebhookUrl
-  Teams Workflows / Power Automate webhook URL. Prefer an environment variable
-  TEAMS_WEBHOOK_URL over hard-coding.
-
-.PARAMETER Query
-  T-SQL to run. If omitted, the built-in mail-health query is used.
-
-.PARAMETER QueryFile
-  Path to a .sql file. Overrides -Query when supplied.
-
-.PARAMETER AlwaysPost
-  Post to Teams even when the query returns zero rows.
-
-.PARAMETER WhatIf
-  Run the query and print the Teams payload without posting.
+.EXAMPLE
+  # After filling CONFIG below:
+  .\QueryAndPostToTeams.ps1
 
 .EXAMPLE
-  $pwd = Read-Host -AsSecureString -Prompt 'SQL password'
-  .\QueryAndPostToTeams.ps1 -ServerInstance 'SQLPROD01' -Database 'DBA' `
-      -SqlLogin 'monitor' -SqlPassword $pwd `
-      -TeamsWebhookUrl $env:TEAMS_WEBHOOK_URL
-
-.EXAMPLE
-  .\QueryAndPostToTeams.ps1 -ServerInstance 'SQLPROD01' -SqlLogin 'monitor' `
-      -SqlPassword $pwd -TeamsWebhookUrl $env:TEAMS_WEBHOOK_URL `
-      -QueryFile 'C:\Alerts\CheckBlocked.sql' -AlwaysPost
+  .\QueryAndPostToTeams.ps1 -QueryFile 'C:\Alerts\CheckBlocked.sql' -AlwaysPost
 
 .NOTES
   Author: Bill McEvoy
   Date:   September 11, 2026
+  Revised: September 11, 2026 — CONFIG defaults at top (SQLServerInstance, UserId, WebhookUrl)
   Requires: System.Data.SqlClient (built into Windows PowerShell 5.1 / .NET Framework)
 #>
 
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string] $ServerInstance,
 
     [Parameter(Mandatory = $false)]
-    [string] $Database = 'DBA',
+    [string] $Database,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [string] $SqlLogin,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $false)]
     [SecureString] $SqlPassword,
 
     [Parameter(Mandatory = $false)]
-    [string] $TeamsWebhookUrl = $env:TEAMS_WEBHOOK_URL,
+    [string] $TeamsWebhookUrl,
 
     [Parameter(Mandatory = $false)]
     [string] $Query,
@@ -87,8 +59,48 @@ param(
     [switch] $AlwaysPost
 )
 
+#==============================================================================
+# CONFIG — edit these on the workstation. Do not commit real secrets to git.
+# Parameters override these when you pass them on the command line.
+#==============================================================================
+$SQLServerInstance = 'YOUR_SQL_INSTANCE'   # e.g. SQLPROD01 or SQLPROD01\INST1
+$DatabaseName      = 'DBA'                 # tool database / query context
+$UserId            = 'YOUR_SQL_LOGIN'      # SQL authentication login
+$WebhookUrl        = ''                    # Teams Workflows webhook URL (or set TEAMS_WEBHOOK_URL)
+# Leave password unset here; you will be prompted unless -SqlPassword is passed.
+#==============================================================================
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+# Apply CONFIG when a parameter was omitted / blank
+if ([string]::IsNullOrWhiteSpace($ServerInstance)) {
+    $ServerInstance = $SQLServerInstance
+}
+if ([string]::IsNullOrWhiteSpace($Database)) {
+    $Database = $DatabaseName
+}
+if ([string]::IsNullOrWhiteSpace($SqlLogin)) {
+    $SqlLogin = $UserId
+}
+if ([string]::IsNullOrWhiteSpace($TeamsWebhookUrl)) {
+    if (-not [string]::IsNullOrWhiteSpace($WebhookUrl)) {
+        $TeamsWebhookUrl = $WebhookUrl
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($env:TEAMS_WEBHOOK_URL)) {
+        $TeamsWebhookUrl = $env:TEAMS_WEBHOOK_URL
+    }
+}
+
+if ([string]::IsNullOrWhiteSpace($ServerInstance) -or $ServerInstance -eq 'YOUR_SQL_INSTANCE') {
+    throw 'Set $SQLServerInstance in the CONFIG block (or pass -ServerInstance).'
+}
+if ([string]::IsNullOrWhiteSpace($SqlLogin) -or $SqlLogin -eq 'YOUR_SQL_LOGIN') {
+    throw 'Set $UserId in the CONFIG block (or pass -SqlLogin).'
+}
+if ($null -eq $SqlPassword) {
+    $SqlPassword = Read-Host -AsSecureString -Prompt "SQL password for $SqlLogin"
+}
 
 #------------------------------------------------------------------------------
 # Default query: mail backlog / stuck Database Mail (tool DB + msdb)
@@ -326,7 +338,7 @@ function Send-TeamsWebhook {
 #------------------------------------------------------------------------------
 
 if ([string]::IsNullOrWhiteSpace($TeamsWebhookUrl) -and -not $WhatIfPreference) {
-    throw 'TeamsWebhookUrl is required (parameter or environment variable TEAMS_WEBHOOK_URL).'
+    throw 'Set $WebhookUrl in the CONFIG block (or pass -TeamsWebhookUrl / TEAMS_WEBHOOK_URL).'
 }
 
 $sqlText = Get-SqlQueryText
