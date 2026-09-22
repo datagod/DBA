@@ -92,6 +92,8 @@ GO
 
 -- Procedures (examples)
 :r PerformanceTuningFramework\AnalyzeIndexes.sql
+:r PerformanceTuningFramework\ShowIndexUsageReport.sql
+:r PerformanceTuningFramework\ShowIndexAnalysisGrid.sql
 :r PerformanceTuningFramework\ExamineDatabasePerformance.sql
 :r PerformanceTuningFramework\CheckForHeaps.sql
 :r PerformanceTuningFramework\ShowHeaps.sql
@@ -109,6 +111,7 @@ In SSMS, open each `.sql` file and execute it against `dba` instead of using `:r
 DECLARE @RunID uniqueidentifier;
 EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase', @AnalysisRunID = @RunID OUTPUT;
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase';
+EXEC dbo.ShowIndexAnalysisGrid @TargetDatabase = N'YourDatabase';
 
 -- Heap scan (lightweight)
 EXEC dbo.CheckForHeaps @TargetDatabase = N'YourDatabase';
@@ -157,6 +160,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 |-----------|------|---------|
 | `AnalyzeIndexes` | `AnalyzeIndexes.sql` | Capture index usage into `IndexAnalysis` |
 | `ShowIndexUsageReport` | `ShowIndexUsageReport.sql` | Fixed-width text report from `IndexAnalysis` |
+| `ShowIndexAnalysisGrid` | `ShowIndexAnalysisGrid.sql` | SSMS Results-grid report from `IndexAnalysis` (summary + detail) |
 | `ExamineDatabasePerformance` | `ExamineDatabasePerformance.sql` | Broad DMV-based database health exam |
 | `CompareDatabasePerformance` | `CompareDatabasePerformance.sql` | Compare two exam runs side-by-side |
 | `CheckForHeaps` | `CheckForHeaps.sql` | Fast catalog-only heap scan |
@@ -186,6 +190,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 ```sql
 EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase';
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase', @SortBy = 'READS';
+EXEC dbo.ShowIndexAnalysisGrid @TargetDatabase = N'YourDatabase', @SortBy = N'READS';
 ```
 
 **Single-table exam**
