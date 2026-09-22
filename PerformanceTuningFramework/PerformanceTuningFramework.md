@@ -46,7 +46,7 @@ Deployment:
 
 File: `IndexAnalysis.sql`
 
-Persistent storage for index usage analysis results. Deploy to the tool database before running `AnalyzeIndexes` or `ShowIndexUsageReport`.
+Persistent storage for index usage analysis results. Deploy to the tool database before running `AnalyzeIndexes`, `ShowIndexUsageReport`, or `ShowIndexAnalysisGrid`.
 
 - One row per index per execution
 - Grouped by `AnalysisRunID` and `CaptureDate` for each run
@@ -350,7 +350,7 @@ Parameters:
 
 File: `ShowIndexUsageReport.sql`
 
-Stored procedure that reads captured data from `IndexAnalysis` and returns a fixed-width, text-based report suitable for on-screen review.
+Stored procedure that reads captured data from `IndexAnalysis` and returns a fixed-width, text-based report suitable for on-screen review. For SSMS Results-grid output, use `ShowIndexAnalysisGrid`.
 
 - Does not capture new data; run `AnalyzeIndexes` first
 - Defaults to the latest `AnalysisRunID` for the target database
@@ -409,6 +409,47 @@ SELECT ObjectName, DisplayIndexName, IndexTypeDesc, KeyColumns, IncludedColumns,
 ```
 
 Note: usage statistics reset when the SQL Server instance restarts. Indexes with no row in `sys.dm_db_index_usage_stats` have had no recorded activity since the restart.
+
+### ShowIndexAnalysisGrid
+
+File: `ShowIndexAnalysisGrid.sql`
+
+Stored procedure that reads captured data from `IndexAnalysis` and returns SSMS Results-grid friendly result sets. Complements `ShowIndexUsageReport` (fixed-width PRINT/text report).
+
+- Does not capture new data; run `AnalyzeIndexes` first
+- Defaults to the latest `AnalysisRunID` for the target database; accepts any prior run
+- Optional one-row summary (counts, size, unused/write-heavy/disabled/heaps) plus typed detail rows
+- Friendly columns align with `vIndexAnalysis` (`ObjectName`, `DisplayIndexName`, `UsageCategory`, `IsUnused`, `IsWriteHeavy`, `LastUsedDate`, etc.) while supporting filters and historical runs
+- Filters: schema/table/index LIKE, exact `UsageCategory`, unused-only, write-heavy-only, include/exclude heaps
+- `@SortBy`: `READS`, `WRITES`, `SIZE`, `OBJECT`, `LAST_USE`, `SEEKS`, `SCANS` (default `READS`); detail limited by `@TopN`
+
+Deployment:
+
+```sql
+-- 1. Run IndexAnalysis.sql in the tool database
+-- 2. Run AnalyzeIndexes.sql in the tool database
+-- 3. Run ShowIndexAnalysisGrid.sql in the tool database
+EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase'
+EXEC dbo.ShowIndexAnalysisGrid @TargetDatabase = N'YourDatabase'
+EXEC dbo.ShowIndexAnalysisGrid
+     @TargetDatabase = N'YourDatabase',
+     @UnusedOnly     = 1,
+     @SortBy         = N'SIZE',
+     @TopN           = 50
+```
+
+Parameters:
+
+- `@TargetDatabase` — database to report on (default: current database)
+- `@AnalysisRunID` — specific capture run (default: latest for the target database)
+- `@SchemaFilter` / `@TableFilter` / `@IndexFilter` — LIKE filters (default `%`)
+- `@UsageCategory` — exact match when set (`Disabled`, `Heap`, `No usage stats since restart`, `Unused (writes only)`, `Write-heavy`, `No activity`, `Active`)
+- `@UnusedOnly` — only indexes with 0 reads and writes > 0
+- `@WriteHeavyOnly` — only indexes where updates exceed 10× reads
+- `@IncludeHeaps` — include `IndexID = 0` rows (default 1)
+- `@TopN` — max detail rows (default 200)
+- `@SortBy` — `READS`, `WRITES`, `SIZE`, `OBJECT`, `LAST_USE`, `SEEKS`, or `SCANS`
+- `@ReturnSummary` / `@ReturnDetail` — enable summary and/or detail result sets (default both on)
 
 ### ExamineQueryStore
 
