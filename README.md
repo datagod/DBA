@@ -418,6 +418,7 @@ Standalone scripts in `Queries/` for one-off investigation (not wrapped as proce
 | Script | Description |
 |--------|-------------|
 | `powershell/ExtractDocuments.ps1` | Extract document content from SQL Server (uses integrated security connection pattern) |
+| `powershell/QueryAndPostToTeams.ps1` | Workstation script: SQL login query → process rows → post to Teams Workflows webhook |
 
 ---
 
