@@ -451,6 +451,8 @@ Parameters:
 - `@SortBy` — `READS`, `WRITES`, `SIZE`, `OBJECT`, `LAST_USE`, `SEEKS`, or `SCANS`
 - `@ReturnSummary` / `@ReturnDetail` — enable summary and/or detail result sets (default both on)
 
+For AI-oriented index context, see [docs/IndexContextForAI.md](../docs/IndexContextForAI.md). That note lists what `IndexAnalysis` already records and the workload, selectivity, coverage-window, and dependency facts still required before an AI should recommend create, drop, or alter.
+
 ### ExamineQueryStore
 
 File: `ExamineQueryStore.sql`

@@ -130,7 +130,11 @@ EXEC dbo.RecommendClusteredIndex
 
 ```
 DBA/
-├── docs/                          # Docs + ProcedureHeaderTemplate.sql (Now-style header/changelog scaffold)
+├── docs/                          # Guides + ProcedureHeaderTemplate.sql (Now-style header/changelog scaffold)
+│   ├── IndexContextForAI.md       # What an AI needs for sound index recommendations
+│   ├── sql_server_multi_workload_performance_strategy.md
+│   ├── ProcedureHeaderTemplate.sql
+│   └── dba-header.jpg
 ├── PerformanceTuningFramework/    # Performance diagnostics suite
 ├── Procedures/                    # General-purpose stored procedures
 ├── Functions/                     # User-defined functions
@@ -192,6 +196,8 @@ EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase';
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase', @SortBy = 'READS';
 EXEC dbo.ShowIndexAnalysisGrid @TargetDatabase = N'YourDatabase', @SortBy = N'READS';
 ```
+
+Usage counters from `IndexAnalysis` and `ShowIndexAnalysisGrid` are enough for human triage in SSMS. The extra context an AI needs before recommending create, drop, or alter — workload, selectivity, how long the counters have been collecting, and drop dependencies — is described in [docs/IndexContextForAI.md](docs/IndexContextForAI.md).
 
 **Single-table exam**
 
