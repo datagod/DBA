@@ -130,7 +130,11 @@ EXEC dbo.RecommendClusteredIndex
 
 ```
 DBA/
-├── docs/                          # Docs + ProcedureHeaderTemplate.sql (Now-style header/changelog scaffold)
+├── docs/                          # Guides + ProcedureHeaderTemplate.sql (Now-style header/changelog scaffold)
+│   ├── IndexContextForAI.md       # What an AI needs for sound index recommendations
+│   ├── sql_server_multi_workload_performance_strategy.md
+│   ├── ProcedureHeaderTemplate.sql
+│   └── dba-header.jpg
 ├── PerformanceTuningFramework/    # Performance diagnostics suite
 ├── Procedures/                    # General-purpose stored procedures
 ├── Functions/                     # User-defined functions
@@ -192,6 +196,8 @@ EXEC dbo.AnalyzeIndexes @TargetDatabase = N'YourDatabase';
 EXEC dbo.ShowIndexUsageReport @TargetDatabase = N'YourDatabase', @SortBy = 'READS';
 EXEC dbo.ShowIndexAnalysisGrid @TargetDatabase = N'YourDatabase', @SortBy = N'READS';
 ```
+
+Usage counters from `IndexAnalysis` and `ShowIndexAnalysisGrid` are enough for human triage in SSMS. The extra context an AI needs before recommending create, drop, or alter — workload, selectivity, how long the counters have been collecting, and drop dependencies — is described in [docs/IndexContextForAI.md](docs/IndexContextForAI.md).
 
 **Single-table exam**
 
@@ -286,6 +292,8 @@ EXEC dbo.StartPerformanceTrace
 EXEC dbo.StopPerformanceTrace @TraceControlID = @TraceID;
 ```
 
+`ShowTraceInfo` reports traces started by this framework. The instance default trace and any black-box trace are read directly from their rollover files by `ShowBlackBoxTraces` in `Procedures/` (see [General Procedures](#general-procedures)).
+
 See [PerformanceTuningFramework.md](PerformanceTuningFramework/PerformanceTuningFramework.md) for full parameter lists, deployment order, and version notes.
 
 ---
@@ -319,6 +327,26 @@ Scripts in `Procedures/` cover monitoring, maintenance visibility, SSIS, and ale
 | `GenerateIndexesForTable` | `GenerateIndexesForTable.sql` | Index DDL suggestions for a table |
 | `Version` | `Version.sql` | SQL Server version information |
 | `Now` / `Now2` | `Now.sql`, `Now2.sql` | Current-activity report (`Now` = 2012+, `Now2` = 2019+) |
+| `ShowBlackBoxTraces` | `ShowBlackBoxTraces.sql` | Newest events from the default trace and any running black-box trace, or from one `@TraceID`. Requires `ALTER TRACE`. Not the Performance Tuning Framework trace (`ShowTraceInfo`). |
+
+```sql
+-- Newest 100 events (default). NULL @TopN is also 100. @TopN = 0 returns every match.
+EXEC dbo.ShowBlackBoxTraces;
+
+-- Growth events from one trace since a point in time
+EXEC dbo.ShowBlackBoxTraces
+     @TraceID     = 1,
+     @TopN        = 50,
+     @StartTime   = '2026-10-01',
+     @EventFilter = N'%Auto Grow%';
+
+-- Every retained event for one database
+EXEC dbo.ShowBlackBoxTraces
+     @DatabaseName = N'YourDatabase',
+     @TopN         = 0;
+```
+
+`@EventFilter` and `@DatabaseName` match exactly unless the value contains `%` or `[`, in which case they are `LIKE` patterns. If the default trace is disabled, the trace is a rowset, or the login lacks `ALTER TRACE`, the procedure returns a `Message` row instead of raising. SQL Server 2012 or later.
 
 ### SSIS
 
@@ -349,7 +377,6 @@ Scripts in `Procedures/` cover monitoring, maintenance visibility, SSIS, and ale
 | `sp_Query2Grid` | `sp_Query2Grid.sql` |
 | `GetTableMetadataXML` | `GetTableMetadataXML` |
 | `ReplaceTextInStoredProcedures` | `ReplaceTextInStoredProcedures` |
-| `ShowBlackBoxTraces` | `ShowBlackBoxTraces.sql` |
 
 ---
 
