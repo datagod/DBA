@@ -6,7 +6,7 @@ SQL Server scripts and utilities for database performance analysis and tuning. D
 
 This framework lives in the `PerformanceTuningFramework` folder of the DBA repository. Each script is designed to be version-aware where possible and to produce output that is easy to read in SSMS or an Azure DevOps wiki.
 
-Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped.
+Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped. `ShowTraceProcessMap` reads any imported SQL Trace table and shows which processes ran, in what order, and where the time went.
 
 ## Tables
 
@@ -812,6 +812,64 @@ Returns:
 - ready-to-run `StopPerformanceTrace` command for each trace
 
 `ShowBlackBoxTraces` in `Procedures/` is a different procedure. It reads the instance default trace and any running black-box trace from their `.trc` rollover files. It does not use `PerformanceTraceControl` or `PerformanceTraceResults`.
+
+### ShowTraceProcessMap
+
+File: `ShowTraceProcessMap.sql`
+
+Reads one imported SQL Trace table and shows the batch-process picture: which processes ran, in what order, how long each took, what overlapped, and where the time went. Deploy it to the tool database. The table may live in another database (`database.schema.table`).
+
+This is not `ShowTraceInfo`. `ShowTraceInfo` reports server-side traces in `PerformanceTraceControl`. `ShowTraceProcessMap` reads a table produced by `fn_trace_gettable ... INTO` or Profiler Save As Table. `Queries/ShowDecodedTrace.sql` is the row-level decode of that same kind of table.
+
+`QueryText` is used when `TextData` is absent, so `dbo.PerformanceTraceResults` can be passed as `@TraceTable`. Filter by time when that table holds more than one trace. Duration is treated as microseconds and CPU as milliseconds (SQL Server 2005 and later). Displayed times are seconds.
+
+Requires SQL Server 2012 (11.x) or later and database compatibility level 110 or higher. Does not start, stop, or import a trace.
+
+```sql
+EXEC dbo.ShowTraceProcessMap
+     @TraceTable = N'TraceLab.dbo.ImportedTrace';
+
+EXEC dbo.ShowTraceProcessMap
+     @TraceTable      = N'dbo.ImportedTrace',
+     @StartTime       = '2026-10-08 01:00',
+     @EndTime         = '2026-10-08 03:00',
+     @ApplicationName = N'Nightly%',
+     @BucketMinutes   = 5,
+     @GapSeconds      = 60,
+     @TopN            = 50;
+```
+
+Parameters:
+
+- `@TraceTable` — required 1-, 2-, or 3-part name. Brackets are accepted. Each part is checked with `PARSENAME` (names longer than 128 characters are split the same way, because `PARSENAME` returns NULL past that) and quoted with `QUOTENAME`. A missing table, a missing `StartTime` column, or a filter aimed at a missing column raises a clear error.
+- `@StartTime`, `@EndTime` — inclusive filter on event `StartTime`
+- `@DatabaseName`, `@ApplicationName`, `@LoginName`, `@HostName` — `LIKE` filters
+- `@MinDurationMs` — leave shorter work out of busy time and steps. The process is still listed, so a chatty session is not split apart by the filter.
+- `@BucketMinutes` — timeline bucket size (default `5`). Widened automatically so the timeline stays within 2000 buckets.
+- `@GapSeconds` — idle gap that splits one session into another run (default `60`). `0` disables gap splitting. Audit Login / Audit Logout still split a reused SPID. A login stays with the work that follows, and a logout stays with the work that just finished.
+- `@TopN` — top normalized statements (default `50`, `0` = all)
+- `@ReturnOverview`, `@ReturnProcesses`, `@ReturnSteps`, `@ReturnTimeline`, `@ReturnGantt`, `@ReturnTopStatements` — turn individual outputs on or off (default all on)
+
+A process is one SPID + application + host + login, split into runs by Audit Login (14), the event after Audit Logout (15), or an idle gap. Database is not part of the key. The primary database is the one where that run spent the most busy time.
+
+Busy time does not double-count. For each run it uses `RPC:Completed` and `SQL:BatchCompleted` (10, 12) when that run has them; otherwise statement events (41, 45); otherwise `SP:Completed` (43). Audit Logout duration is how long the session was connected, not work, and is never added in. Steps use the finest grain for that run: statements (41, 45) when present, otherwise `SP:Completed`, otherwise the batch/RPC events. Consecutive identical normalized text collapses into one step (`dbo.LoadCustomer` × 48,213).
+
+Normalization is intentionally simple. Quoted literals become `?`. Digits become `?`, including digits inside object names (`Load_2024` and `Load_2025` group together). Only the first 4000 characters are kept, and the grouping key is the first 400 of those. Up to 100 string literals per statement are stripped. Doubled quotes inside a literal are not understood. Block comments are removed. Line comments are not. This is not a SQL parser.
+
+The trace is read once into a staging table created in the procedure (not inside `sp_executesql`), filtered, then indexed. Later result sets are derived from that copy.
+
+Result sets:
+
+1. Overview — trace window, elapsed seconds, event count, distinct SPIDs / applications / hosts / logins / databases, busy CPU / reads / writes, and the rules used for busy time, steps, and normalization
+2. Event classes — count, raw duration, and whether that class was counted as busy time or as steps. Logout can show a large raw duration with `CountedInBusy = 0`
+3. Processes in start order — elapsed, busy seconds, busy percent of elapsed (a low percent means the session was chatty or waiting outside SQL), CPU, reads, writes, row counts, work events, main object, main statement, and `MaxConcurrent` (peak processes at once during that run, including itself; 1 means nothing else overlapped)
+4. Steps — run-length of the normalized statement or procedure, with executions, busy seconds, and the first/last time
+5. Timeline — one row per bucket: active processes, busy processes, CPU, reads, writes, and the names of the processes in that bucket. CPU, reads, and writes are charged to the bucket where the work started, so a long batch is not added again in every bucket it spans
+6. Text Gantt — one row per process. A full block is a busy bucket, a light shade is connected but idle, a middle dot is outside the process
+7. Mermaid `gantt` — one row, one `nvarchar(max)` column to paste into Markdown. Capped at the 50 processes with the most busy time; `MermaidNote` says when the cap applied
+8. Top statements — normalized text, executions, total and average seconds, CPU, reads, writes, first/last seen, and which processes ran it
+
+`ShowTraceProcessMap` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own.
 
 ### StopPerformanceTrace
 
