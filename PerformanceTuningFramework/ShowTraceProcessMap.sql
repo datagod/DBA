@@ -82,6 +82,16 @@ AS
 -- Author:       Bill McEvoy
 -- Reason:       Initial release.
 ---------------------------------------------------------------------------------------------------
+-- Version:      1.1
+-- Date Revised: October 8, 2026
+-- Author:       William McEvoy
+-- Reason:       Fix truncation on long TextData. Statement text longer than 400
+--               characters was assigned to StatementKey before it was shortened,
+--               which aborted the procedure under ANSI_WARNINGS ON. The full
+--               statement is now kept through normalization so two long statements
+--               that differ past the first 400 characters stay separate. The
+--               process row still shows the first 400 characters.
+---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 
 DECLARE
@@ -91,7 +101,7 @@ DECLARE
     @Object               sysname,
     @Schema               sysname,
     @DbName               sysname,
-    @FullName             nvarchar(400),
+    @FullName             nvarchar(1000),
     @Sql                  nvarchar(max),
     @Where                nvarchar(max),
     @OrderBy              nvarchar(400),
@@ -136,7 +146,7 @@ DECLARE
     @MermaidNote          nvarchar(300),
     @MermaidBody          nvarchar(max),
     @Mermaid              nvarchar(max),
-    @FilterNote           nvarchar(2000),
+    @FilterNote           nvarchar(max),
     @EventNameSource      nvarchar(40),
     @BusyChar             nchar(1),
     @IdleChar             nchar(1),
@@ -345,7 +355,7 @@ WHERE c.object_id = OBJECT_ID(@FullName, N''U'')
 
 EXEC sys.sp_executesql
     @Sql,
-    N'@FullName nvarchar(400)',
+    N'@FullName nvarchar(1000)',
     @FullName = @FullName
 
 SELECT @ColStartTime = ColumnName FROM #Column WHERE ColumnName = N'StartTime'
@@ -428,13 +438,13 @@ CREATE TABLE #TraceEvent
     Reads            bigint         NULL,
     Writes           bigint         NULL,
     RowCounts        bigint         NULL,
-    TextData         nvarchar(4000) NULL,
+    TextData         nvarchar(max)  NULL,
     IsBoundary       bit            NOT NULL DEFAULT 0,
     UseForBusy       bit            NOT NULL DEFAULT 0,
     UseForDetail     bit            NOT NULL DEFAULT 0,
     RunNum           int            NULL,
     ProcessId        int            NULL,
-    StatementKey     nvarchar(400)  NULL,
+    StatementKey     nvarchar(max)  NULL,
     PRIMARY KEY CLUSTERED (EventSeq)
 )
 
@@ -470,15 +480,15 @@ SELECT
     SPID = ' + CASE WHEN @ColSPID IS NULL THEN N'CONVERT(int, NULL)'
                     ELSE N'TRY_CONVERT(int, t.' + QUOTENAME(@ColSPID) + N')' END + N',
     DatabaseName = ' + CASE WHEN @ColDatabaseName IS NULL THEN N'CONVERT(nvarchar(128), NULL)'
-                            ELSE N'CONVERT(nvarchar(128), t.' + QUOTENAME(@ColDatabaseName) + N')' END + N',
+                            ELSE N'CONVERT(nvarchar(128), LEFT(CONVERT(nvarchar(max), t.' + QUOTENAME(@ColDatabaseName) + N'), 128))' END + N',
     ApplicationName = ' + CASE WHEN @ColApplicationName IS NULL THEN N'CONVERT(nvarchar(128), NULL)'
-                               ELSE N'CONVERT(nvarchar(128), t.' + QUOTENAME(@ColApplicationName) + N')' END + N',
+                               ELSE N'CONVERT(nvarchar(128), LEFT(CONVERT(nvarchar(max), t.' + QUOTENAME(@ColApplicationName) + N'), 128))' END + N',
     HostName = ' + CASE WHEN @ColHostName IS NULL THEN N'CONVERT(nvarchar(128), NULL)'
-                        ELSE N'CONVERT(nvarchar(128), t.' + QUOTENAME(@ColHostName) + N')' END + N',
+                        ELSE N'CONVERT(nvarchar(128), LEFT(CONVERT(nvarchar(max), t.' + QUOTENAME(@ColHostName) + N'), 128))' END + N',
     LoginName = ' + CASE WHEN @ColLoginName IS NULL THEN N'CONVERT(nvarchar(128), NULL)'
-                         ELSE N'CONVERT(nvarchar(128), t.' + QUOTENAME(@ColLoginName) + N')' END + N',
+                         ELSE N'CONVERT(nvarchar(128), LEFT(CONVERT(nvarchar(max), t.' + QUOTENAME(@ColLoginName) + N'), 128))' END + N',
     ObjectName = ' + CASE WHEN @ColObjectName IS NULL THEN N'CONVERT(nvarchar(128), NULL)'
-                          ELSE N'CONVERT(nvarchar(128), t.' + QUOTENAME(@ColObjectName) + N')' END + N',
+                          ELSE N'CONVERT(nvarchar(128), LEFT(CONVERT(nvarchar(max), t.' + QUOTENAME(@ColObjectName) + N'), 128))' END + N',
     StartTime = CONVERT(datetime, t.' + QUOTENAME(@ColStartTime) + N'),
     EndTime = ' + CASE WHEN @ColEndTime IS NULL THEN N'CONVERT(datetime, NULL)'
                        ELSE N'TRY_CONVERT(datetime, t.' + QUOTENAME(@ColEndTime) + N')' END + N',
@@ -492,8 +502,8 @@ SELECT
                       ELSE N'TRY_CONVERT(bigint, t.' + QUOTENAME(@ColWrites) + N')' END + N',
     RowCounts = ' + CASE WHEN @ColRowCounts IS NULL THEN N'CONVERT(bigint, NULL)'
                          ELSE N'TRY_CONVERT(bigint, t.' + QUOTENAME(@ColRowCounts) + N')' END + N',
-    TextData = ' + CASE WHEN @ColTextData IS NULL THEN N'CONVERT(nvarchar(4000), NULL)'
-                        ELSE N'CONVERT(nvarchar(4000), t.' + QUOTENAME(@ColTextData) + N')' END + N'
+    TextData = ' + CASE WHEN @ColTextData IS NULL THEN N'CONVERT(nvarchar(max), NULL)'
+                        ELSE N'CONVERT(nvarchar(max), t.' + QUOTENAME(@ColTextData) + N')' END + N'
 FROM ' + @FullName + N' AS t'
 + @Where + N'
 ORDER BY ' + @OrderBy + N'
@@ -786,7 +796,7 @@ INNER JOIN DbRank AS d
    AND d.Rn = 1
 
 UPDATE p
-SET Databases = LEFT(x.List, 1000)
+SET Databases = CONVERT(nvarchar(1000), LEFT(x.List, 1000))
 FROM #Process AS p
 CROSS APPLY
 (
@@ -807,15 +817,19 @@ CROSS APPLY
 
 ---------------------------------------------------------------------------------------------
 -- Normalize detail text so parameter values do not split a repeated call into many steps.
+-- The full TextData value is kept (ntext and nvarchar(max) sources included). The grouping
+-- key is that whole normalized value, so two statements that share a long prefix and differ
+-- later stay in different groups. MainStatement on the process row is the first 400
+-- characters of the key. Very large statement text uses more tempdb.
 -- Limits (this is not a SQL parser):
---   * Only the first 4000 characters of TextData are kept.
---   * The grouping key is the first 400 characters after normalization.
 --   * Up to 100 single-quoted literals are replaced with ?. Doubled quotes inside a
 --     literal ('it''s') are not understood and can cut the literal short.
 --   * Digits are replaced, including digits that are part of an object name
 --     (Load_2024 and Load_2025 become the same key).
 --   * Block comments (/* */) are removed. Line comments (--) are not.
 --   * When TextData is empty, ObjectName is used and is not digit-stripped.
+--   * Replacing whitespace, quotes, comments, and digits shortens the key or leaves
+--     it the same length. It does not grow.
 ---------------------------------------------------------------------------------------------
 UPDATE #TraceEvent
 SET StatementKey = TextData
@@ -906,12 +920,7 @@ WHERE UseForDetail = 1
   AND StatementKey IS NOT NULL
 
 UPDATE #TraceEvent
-SET StatementKey = LEFT(StatementKey, 400)
-WHERE UseForDetail = 1
-  AND StatementKey IS NOT NULL
-
-UPDATE #TraceEvent
-SET StatementKey = LEFT(ObjectName, 400)
+SET StatementKey = CONVERT(nvarchar(max), LEFT(ObjectName, 400))
 WHERE UseForDetail = 1
   AND (StatementKey IS NULL OR StatementKey = N'')
   AND ObjectName IS NOT NULL
@@ -942,7 +951,7 @@ WHERE UseForDetail = 1
     ) AS s
 )
 UPDATE p
-SET MainStatement = r.StatementKey
+SET MainStatement = CONVERT(nvarchar(400), LEFT(r.StatementKey, 400))
 FROM #Process AS p
 INNER JOIN Ranked AS r
     ON r.ProcessId = p.ProcessId
@@ -977,7 +986,7 @@ INNER JOIN Ranked AS r
    AND r.Rn = 1
 
 UPDATE p
-SET ProcessLabel = LEFT(
+SET ProcessLabel = CONVERT(nvarchar(500), LEFT(
         N'SPID ' + ISNULL(CONVERT(nvarchar(11), p.SPID), N'?')
         + N' | ' + ISNULL(NULLIF(p.ApplicationName, N''), N'(no app)')
         + N' | ' + ISNULL(NULLIF(p.HostName, N''), N'(no host)')
@@ -985,7 +994,7 @@ SET ProcessLabel = LEFT(
         + CASE
               WHEN x.SessionRuns > 1 THEN N' | run ' + CONVERT(nvarchar(11), p.RunNum)
               ELSE N''
-          END, 500)
+          END, 500))
 FROM #Process AS p
 INNER JOIN
 (
@@ -1041,7 +1050,7 @@ CREATE NONCLUSTERED INDEX IX_TraceEvent_Busy
 
 CREATE NONCLUSTERED INDEX IX_TraceEvent_Detail
     ON #TraceEvent (UseForDetail, ProcessId, StartTime, EventSequence, EventSeq)
-    INCLUDE (EndTime, DurationUs, CpuMs, Reads, Writes, RowCounts, EventClass, StatementKey, ObjectName)
+    INCLUDE (EndTime, DurationUs, CpuMs, Reads, Writes, RowCounts, EventClass, ObjectName)
 
 ---------------------------------------------------------------------------------------------
 -- Timeline buckets. Clock-aligned. Widened automatically past 2000 buckets.
@@ -1198,7 +1207,8 @@ BEGIN
 
     UPDATE bm
     SET ActiveList = CASE
-                         WHEN LEN(x.List) > 2000 THEN LEFT(x.List, 2000) + N'...'
+                         WHEN x.List IS NULL THEN NULL
+                         WHEN LEN(x.List) > 2000 THEN CONVERT(nvarchar(max), LEFT(x.List, 2000)) + N'...'
                          ELSE x.List
                      END
     FROM #BucketMetric AS bm
@@ -1408,7 +1418,7 @@ BEGIN
         DurationNote          = N'Duration in the trace is microseconds (SQL Server 2005 and later). CPU is milliseconds. This report shows both in seconds.',
         BusyRule              = N'Per process, busy time is RPC:Completed and SQL:BatchCompleted (10, 12) when that run has them; otherwise statement events (41, 45); otherwise SP:Completed (43). Audit Login, Audit Logout, and ExistingConnection are never busy time. Logout duration is connection time, not work.',
         StepRule              = N'Per process, steps are statement events (41, 45) when that run has them; otherwise SP:Completed (43); otherwise the batch/RPC events. Consecutive identical normalized text is one step.',
-        NormalizationNote     = N'Literals in quotes become ?. Digits become ?, including digits inside object names. Key is the first 400 characters of the first 4000 characters of text. Not a SQL parser.',
+        NormalizationNote     = N'Literals in quotes become ?. Digits become ?, including digits inside object names. The grouping key is the full statement text. The process MainStatement column shows the first 400 characters. Not a SQL parser.',
         ConcurrencyNote       = N'MaxConcurrent is the peak number of processes running at the same time during that run, including itself. 1 means nothing else overlapped. Timeline CPU/reads/writes are charged to the bucket where the work started.',
         BucketNote            = @BucketNote,
         GanttNote             = @GanttNote,
