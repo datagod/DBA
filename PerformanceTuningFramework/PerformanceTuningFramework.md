@@ -811,6 +811,8 @@ Returns:
 - imported event statistics such as event count, max/avg duration, max reads/writes, and first/last event times
 - ready-to-run `StopPerformanceTrace` command for each trace
 
+`ShowBlackBoxTraces` in `Procedures/` is a different procedure. It reads the instance default trace and any running black-box trace from their `.trc` rollover files. It does not use `PerformanceTraceControl` or `PerformanceTraceResults`.
+
 ### StopPerformanceTrace
 
 File: `StopPerformanceTrace.sql`
