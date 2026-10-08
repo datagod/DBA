@@ -60,6 +60,10 @@
       ambiguous to fn_trace_gettable; StartPerformanceTrace avoids that
       pattern on purpose.
 
+      fn_trace_gettable returns one fixed column list for every file.
+      Columns the trace did not collect are NULL. The path is a variable,
+      so each file is a static INSERT...SELECT.
+
   Duration
       SQL Trace stores Duration in microseconds and CPU in milliseconds.
       The result uses DurationMilliseconds, DurationSeconds, and
@@ -130,6 +134,16 @@ AS
 --               microseconds, and return a message (not an error) when the default trace
 --               is disabled, the trace is a rowset, or ALTER TRACE is missing.
 ---------------------------------------------------------------------------------------------------
+-- Version:      1.2
+-- Date Revised: October 8, 2026
+-- Author:       William McEvoy
+-- Reason:       Read each trace file with a static INSERT from fn_trace_gettable.
+--               The previous build loaded rows into #Raw inside sp_executesql.
+--               A temp table created in that batch is dropped when the batch
+--               ends, so the outer procedure never saw it and returned no events.
+--               The function's column list is fixed, so the dynamic column map
+--               is not needed.
+---------------------------------------------------------------------------------------------------
 SET NOCOUNT ON
 SET XACT_ABORT OFF
 
@@ -172,15 +186,6 @@ DECLARE
     @CurrentFile         nvarchar(260),
     @IsActiveFile        bit,
     @LoadedForTrace      int,
-    @Sql                 nvarchar(max),
-    @Expr                nvarchar(max),
-    @Where               nvarchar(max),
-    @Piece               nvarchar(400),
-    @ColName             sysname,
-    @SqlType             nvarchar(30),
-    @Kind                varchar(10),
-    @Ordinal             int,
-    @MaxOrdinal          int,
     @ErrNum              int,
     @ErrMsg              nvarchar(4000),
     @ErrorID             int,
@@ -196,14 +201,6 @@ DECLARE @FileErrors TABLE
     ErrorNumber  int NULL,
     ErrorMessage nvarchar(4000) NULL,
     IsActiveFile bit NOT NULL
-)
-
-DECLARE @ColumnMap TABLE
-(
-    Ordinal    int          NOT NULL PRIMARY KEY,
-    ColumnName sysname      NOT NULL,
-    SqlType    nvarchar(30) NOT NULL,
-    Kind       varchar(10)  NOT NULL
 )
 
 ---------------------------------------------------------------------
@@ -420,7 +417,6 @@ BEGIN TRY
 END TRY
 BEGIN CATCH
     -- Filename detection above still marks a blackbox.trc path.
-    SET @ErrNum = ERROR_NUMBER()
 END CATCH
 
 UPDATE #Candidates
@@ -723,37 +719,10 @@ CREATE TABLE #Events
     IntegerData      bigint         NULL
 )
 
-INSERT INTO @ColumnMap (Ordinal, ColumnName, SqlType, Kind)
-VALUES
-    (1,  N'EventClass',       N'int',            N'number'),
-    (2,  N'EventSubClass',    N'int',            N'number'),
-    (3,  N'TextData',         N'nvarchar(max)',  N'string'),
-    (4,  N'DatabaseID',       N'int',            N'number'),
-    (5,  N'DatabaseName',     N'nvarchar(256)',  N'string'),
-    (6,  N'ObjectName',       N'nvarchar(256)',  N'string'),
-    (7,  N'LoginName',        N'nvarchar(256)',  N'string'),
-    (8,  N'HostName',         N'nvarchar(256)',  N'string'),
-    (9,  N'ApplicationName',  N'nvarchar(256)',  N'string'),
-    (10, N'SPID',             N'int',            N'number'),
-    (11, N'Duration',         N'bigint',         N'number'),
-    (12, N'CPU',              N'int',            N'number'),
-    (13, N'Reads',            N'bigint',         N'number'),
-    (14, N'Writes',           N'bigint',         N'number'),
-    (15, N'RowCounts',        N'bigint',         N'number'),
-    (16, N'StartTime',        N'datetime',       N'time'),
-    (17, N'EndTime',          N'datetime',       N'time'),
-    (18, N'EventSequence',    N'bigint',         N'number'),
-    (19, N'Error',            N'int',            N'number'),
-    (20, N'Severity',         N'int',            N'number'),
-    (21, N'FileName',         N'nvarchar(260)',  N'string'),
-    (22, N'IntegerData',      N'bigint',         N'number')
-
-SELECT @MaxOrdinal = MAX(Ordinal) FROM @ColumnMap
-
 ---------------------------------------------------------------------
--- Read each file                                                  --
--- #Raw is created only inside dynamic SQL so a missing rollover  --
--- file can be skipped without a compile error on the temp table. --
+-- Read each file. fn_trace_gettable accepts the path variable    --
+-- and returns the same columns for every file. Missing rollover  --
+-- siblings are caught here so one gap does not abort the proc.   --
 ---------------------------------------------------------------------
 SET @FileID = 0
 
@@ -785,15 +754,54 @@ BEGIN
             CONTINUE
     END
 
-    EXEC sys.sp_executesql
-        N'IF OBJECT_ID(N''tempdb..#Raw'') IS NOT NULL DROP TABLE #Raw;'
-
     BEGIN TRY
-        SET @Sql = N'SELECT * INTO #Raw FROM sys.fn_trace_gettable(@FilePath, 1);'
-        EXEC sys.sp_executesql
-            @Sql,
-            N'@FilePath nvarchar(260)',
-            @FilePath = @CurrentFile
+        INSERT INTO #Events
+        (
+            TraceID, TraceRole, TraceStatus, SourceFile,
+            EventClass, EventSubClass, TextData, DatabaseID, DatabaseName,
+            ObjectName, LoginName, HostName, ApplicationName, SPID,
+            Duration, CPU, Reads, Writes, RowCounts,
+            StartTime, EndTime, EventSequence, Error, Severity,
+            DatabaseFileName, IntegerData
+        )
+        SELECT
+            @CurrentTraceID,
+            @TraceRole,
+            @TraceStatus,
+            @CurrentFile,
+            tr.EventClass,
+            tr.EventSubClass,
+            CONVERT(nvarchar(max), tr.TextData),
+            tr.DatabaseID,
+            CONVERT(nvarchar(256), tr.DatabaseName),
+            CONVERT(nvarchar(256), tr.ObjectName),
+            CONVERT(nvarchar(256), tr.LoginName),
+            CONVERT(nvarchar(256), tr.HostName),
+            CONVERT(nvarchar(256), tr.ApplicationName),
+            tr.SPID,
+            tr.Duration,
+            tr.CPU,
+            tr.Reads,
+            tr.Writes,
+            tr.RowCounts,
+            tr.StartTime,
+            tr.EndTime,
+            tr.EventSequence,
+            tr.Error,
+            tr.Severity,
+            CONVERT(nvarchar(260), tr.FileName),
+            CONVERT(bigint, tr.IntegerData)
+          FROM sys.fn_trace_gettable(@CurrentFile, 1) AS tr
+         WHERE (@StartTime IS NULL OR tr.StartTime >= @StartTime)
+           AND (
+                    @DatabaseName IS NULL
+                 OR (@DatabaseLike = 1 AND tr.DatabaseName LIKE @DatabaseName)
+                 OR (@DatabaseLike = 0 AND tr.DatabaseName = @DatabaseName)
+               )
+           AND (
+                    @HasEventFilter = 0
+                 OR tr.EventClass IN (SELECT EventClass FROM #EventClasses)
+               )
     END TRY
     BEGIN CATCH
         SET @ErrNum = ERROR_NUMBER()
@@ -810,137 +818,7 @@ BEGIN
             VALUES (@CurrentTraceID, @CurrentFile, @ErrNum, @ErrMsg, @IsActiveFile)
         END
     END CATCH
-
-    IF OBJECT_ID(N'tempdb..#Raw') IS NULL
-        CONTINUE
-
-    SET @Expr = N''
-    SET @Ordinal = 1
-
-    WHILE @Ordinal <= @MaxOrdinal
-    BEGIN
-        SELECT
-            @ColName = ColumnName,
-            @SqlType = SqlType,
-            @Kind    = Kind
-          FROM @ColumnMap
-         WHERE Ordinal = @Ordinal
-
-        IF EXISTS (
-            SELECT 1
-              FROM tempdb.sys.columns
-             WHERE object_id = OBJECT_ID(N'tempdb..#Raw')
-               AND name = @ColName
-        )
-        BEGIN
-            IF @Kind = 'number'
-                SET @Piece = N'TRY_CONVERT(' + @SqlType + N', ' + @ColName + N')'
-            ELSE
-                SET @Piece = N'CONVERT(' + @SqlType + N', ' + @ColName + N')'
-        END
-        ELSE
-            SET @Piece = N'CONVERT(' + @SqlType + N', NULL)'
-
-        IF @Expr = N''
-            SET @Expr = @Piece
-        ELSE
-            SET @Expr = @Expr + N', ' + @Piece
-
-        SET @Ordinal = @Ordinal + 1
-    END
-
-    SET @Where = N''
-
-    IF @StartTime IS NOT NULL
-    BEGIN
-        IF EXISTS (
-            SELECT 1
-              FROM tempdb.sys.columns
-             WHERE object_id = OBJECT_ID(N'tempdb..#Raw')
-               AND name = N'StartTime'
-        )
-            SET @Where = @Where + N' AND StartTime >= @StartTime'
-        ELSE
-            SET @Where = @Where + N' AND 1 = 0'
-    END
-
-    IF @DatabaseName IS NOT NULL
-    BEGIN
-        IF EXISTS (
-            SELECT 1
-              FROM tempdb.sys.columns
-             WHERE object_id = OBJECT_ID(N'tempdb..#Raw')
-               AND name = N'DatabaseName'
-        )
-        BEGIN
-            IF @DatabaseLike = 1
-                SET @Where = @Where + N' AND DatabaseName LIKE @DatabaseName'
-            ELSE
-                SET @Where = @Where + N' AND DatabaseName = @DatabaseName'
-        END
-        ELSE
-            SET @Where = @Where + N' AND 1 = 0'
-    END
-
-    IF @HasEventFilter = 1
-    BEGIN
-        IF EXISTS (
-            SELECT 1
-              FROM tempdb.sys.columns
-             WHERE object_id = OBJECT_ID(N'tempdb..#Raw')
-               AND name = N'EventClass'
-        )
-            SET @Where = @Where + N' AND EventClass IN (SELECT EventClass FROM #EventClasses)'
-        ELSE
-            SET @Where = @Where + N' AND 1 = 0'
-    END
-
-    SET @Sql = N'
-INSERT INTO #Events
-(
-    TraceID, TraceRole, TraceStatus, SourceFile,
-    EventClass, EventSubClass, TextData, DatabaseID, DatabaseName,
-    ObjectName, LoginName, HostName, ApplicationName, SPID,
-    Duration, CPU, Reads, Writes, RowCounts,
-    StartTime, EndTime, EventSequence, Error, Severity,
-    DatabaseFileName, IntegerData
-)
-SELECT
-    @TraceID, @TraceRole, @TraceStatus, @FilePath, '
-        + @Expr
-        + N'
-  FROM #Raw
- WHERE 1 = 1'
-        + @Where
-
-    BEGIN TRY
-        EXEC sys.sp_executesql
-            @Sql,
-            N'@TraceID int, @TraceRole nvarchar(20), @TraceStatus nvarchar(10), @FilePath nvarchar(260), @StartTime datetime, @DatabaseName nvarchar(128)',
-            @TraceID = @CurrentTraceID,
-            @TraceRole = @TraceRole,
-            @TraceStatus = @TraceStatus,
-            @FilePath = @CurrentFile,
-            @StartTime = @StartTime,
-            @DatabaseName = @DatabaseName
-    END TRY
-    BEGIN CATCH
-        INSERT INTO @FileErrors (TraceID, FilePath, ErrorNumber, ErrorMessage, IsActiveFile)
-        VALUES (
-            @CurrentTraceID,
-            @CurrentFile,
-            ERROR_NUMBER(),
-            ERROR_MESSAGE(),
-            @IsActiveFile
-        )
-    END CATCH
-
-    EXEC sys.sp_executesql
-        N'IF OBJECT_ID(N''tempdb..#Raw'') IS NOT NULL DROP TABLE #Raw;'
 END
-
-EXEC sys.sp_executesql
-    N'IF OBJECT_ID(N''tempdb..#Raw'') IS NOT NULL DROP TABLE #Raw;'
 
 ---------------------------------------------------------------------
 -- Nothing loaded                                                  --
