@@ -100,6 +100,7 @@ GO
 :r PerformanceTuningFramework\ShowBackupHealth.sql
 :r PerformanceTuningFramework\ShowRestoreHealth.sql
 :r PerformanceTuningFramework\RecommendClusteredIndex.sql
+:r PerformanceTuningFramework\ShowTraceProcessMap.sql
 ```
 
 In SSMS, open each `.sql` file and execute it against `dba` instead of using `:r` if you prefer.
@@ -182,6 +183,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `StartPerformanceTrace` | `StartPerformanceTrace.sql` | Start a filtered server-side trace |
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
+| `ShowTraceProcessMap` | `ShowTraceProcessMap.sql` | Process map of an imported SQL Trace table: runs, order, overlap, Gantt, top statements |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
 | `ShowBackupHealth` | `ShowBackupHealth.sql` | Instance backup-health diagnostic: in-progress backups, last FULL/DIFF/LOG per database, backup jobs, and ranked findings |
 | `ShowRestoreHealth` | `ShowRestoreHealth.sql` | Instance restore-health diagnostic: in-progress restores, database state, last restore, restore jobs, and ranked findings |
@@ -290,7 +292,16 @@ EXEC dbo.StartPerformanceTrace
 
 -- ... later ...
 EXEC dbo.StopPerformanceTrace @TraceControlID = @TraceID;
+
+-- Big picture of an imported trace table (fn_trace_gettable or Profiler Save As Table).
+-- QueryText is used when the table has no TextData, so PerformanceTraceResults works too.
+EXEC dbo.ShowTraceProcessMap
+     @TraceTable    = N'dbo.PerformanceTraceResults',
+     @BucketMinutes = 5,
+     @GapSeconds    = 60;
 ```
+
+`Queries/ShowDecodedTrace.sql` is the row-level decode of a generic imported trace. `ShowTraceProcessMap` is the process view of that same kind of table.
 
 See [PerformanceTuningFramework.md](PerformanceTuningFramework/PerformanceTuningFramework.md) for full parameter lists, deployment order, and version notes.
 
@@ -420,7 +431,7 @@ Standalone scripts in `Queries/` for one-off investigation (not wrapped as proce
 | Recent poor-performing queries | `RecentPoorPerformingQueries.sql` |
 | Linked server tables | `ShowLinkedServerTables` |
 | Recovery model stats | `RecoveryStats` |
-| Decode a generic imported SQL Trace table (set @TraceTable) | `ShowDecodedTrace.sql` |
+| Decode a generic imported SQL Trace table (set @TraceTable). For processes, overlap, and a Gantt, use `ShowTraceProcessMap` | `ShowDecodedTrace.sql` |
 
 ---
 

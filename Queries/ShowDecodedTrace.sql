@@ -15,6 +15,12 @@
   Duration is stored in microseconds; CPU is stored in milliseconds.
   Output times are returned in seconds.
 
+  This script is a row-level decode, ordered by duration. For the batch-process
+  picture (who ran, in what order, what overlapped, and where the time went),
+  deploy PerformanceTuningFramework/ShowTraceProcessMap.sql and execute
+  dbo.ShowTraceProcessMap. That procedure accepts the same kind of imported
+  table, including a three-part name.
+
   Requires VIEW SERVER STATE (sys.trace_events).
 */
 
