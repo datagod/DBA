@@ -1301,7 +1301,7 @@ End Function
                         <ChartArea Name="GanttArea">
                           <ChartCategoryAxes>
                             <ChartAxis Name="ProcessAxis">
-                              <Visible>true</Visible>
+                              <Visible>True</Visible>
                               <Style>
                                 <FontFamily>=Parameters!FontName.Value</FontFamily>
                                 <FontSize>8pt</FontSize>
@@ -1323,7 +1323,7 @@ End Function
                               <MinFontSize>7pt</MinFontSize>
                               <MaxFontSize>8pt</MaxFontSize>
                               <ChartMajorGridLines>
-                                <Enabled>true</Enabled>
+                                <Enabled>True</Enabled>
                                 <Style>
                                   <Color>#E6E6E6</Color>
                                 </Style>
@@ -1332,7 +1332,7 @@ End Function
                           </ChartCategoryAxes>
                           <ChartValueAxes>
                             <ChartAxis Name="TimeAxis">
-                              <Visible>true</Visible>
+                              <Visible>True</Visible>
                               <Style>
                                 <FontFamily>=Parameters!FontName.Value</FontFamily>
                                 <FontSize>8pt</FontSize>
@@ -1354,7 +1354,7 @@ End Function
                               <MinFontSize>7pt</MinFontSize>
                               <MaxFontSize>8pt</MaxFontSize>
                               <ChartMajorGridLines>
-                                <Enabled>true</Enabled>
+                                <Enabled>True</Enabled>
                                 <Style>
                                   <Color>#E6E6E6</Color>
                                 </Style>
@@ -1365,7 +1365,7 @@ End Function
                       </ChartAreas>
                       <ChartLegends>
                         <ChartLegend Name="GanttLegend">
-                          <Position>Bottom</Position>
+                          <Position>BottomCenter</Position>
                           <DockToChartArea>GanttArea</DockToChartArea>
                           <DockOutsideChartArea>true</DockOutsideChartArea>
                           <TextWrapThreshold>25</TextWrapThreshold>
@@ -1554,7 +1554,7 @@ End Function
                         <ChartArea Name="BucketArea">
                           <ChartCategoryAxes>
                             <ChartAxis Name="BucketAxis">
-                              <Visible>true</Visible>
+                              <Visible>True</Visible>
                               <Style>
                                 <FontFamily>=Parameters!FontName.Value</FontFamily>
                                 <FontSize>8pt</FontSize>
@@ -1575,7 +1575,7 @@ End Function
                               <MinFontSize>7pt</MinFontSize>
                               <MaxFontSize>8pt</MaxFontSize>
                               <ChartMajorGridLines>
-                                <Enabled>true</Enabled>
+                                <Enabled>True</Enabled>
                                 <Style>
                                   <Color>#E6E6E6</Color>
                                 </Style>
@@ -1584,7 +1584,7 @@ End Function
                           </ChartCategoryAxes>
                           <ChartValueAxes>
                             <ChartAxis Name="BusyAxis">
-                              <Visible>true</Visible>
+                              <Visible>True</Visible>
                               <Style>
                                 <FontFamily>=Parameters!FontName.Value</FontFamily>
                                 <FontSize>8pt</FontSize>
@@ -1605,7 +1605,7 @@ End Function
                               <MinFontSize>7pt</MinFontSize>
                               <MaxFontSize>8pt</MaxFontSize>
                               <ChartMajorGridLines>
-                                <Enabled>true</Enabled>
+                                <Enabled>True</Enabled>
                                 <Style>
                                   <Color>#E6E6E6</Color>
                                 </Style>
@@ -1616,7 +1616,7 @@ End Function
                       </ChartAreas>
                       <ChartLegends>
                         <ChartLegend Name="BucketLegend">
-                          <Position>Bottom</Position>
+                          <Position>BottomCenter</Position>
                           <DockToChartArea>BucketArea</DockToChartArea>
                           <DockOutsideChartArea>true</DockOutsideChartArea>
                           <TextWrapThreshold>25</TextWrapThreshold>
