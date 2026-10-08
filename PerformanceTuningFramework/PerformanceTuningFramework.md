@@ -6,7 +6,7 @@ SQL Server scripts and utilities for database performance analysis and tuning. D
 
 This framework lives in the `PerformanceTuningFramework` folder of the DBA repository. Each script is designed to be version-aware where possible and to produce output that is easy to read in SSMS or an Azure DevOps wiki.
 
-Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped. `ShowTraceProcessMap` reads any imported SQL Trace table and shows which processes ran, in what order, and where the time went.
+Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped. `ShowTraceProcessMap` reads any imported SQL Trace table and shows which processes ran, in what order, and where the time went. `ShowTraceSourceBreakdown` is the companion view of that same table by application, host, login, database, and object.
 
 ## Tables
 
@@ -869,7 +869,65 @@ Result sets:
 7. Mermaid `gantt` — one row, one `nvarchar(max)` column to paste into Markdown. Capped at the 50 processes with the most busy time; `MermaidNote` says when the cap applied
 8. Top statements — normalized text, executions, total and average seconds, CPU, reads, writes, first/last seen, and which processes ran it
 
-`ShowTraceProcessMap` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own.
+`ShowTraceProcessMap` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own. For where the busy time came from, use `ShowTraceSourceBreakdown`.
+
+### ShowTraceSourceBreakdown
+
+File: `ShowTraceSourceBreakdown.sql`
+
+Breaks one imported SQL Trace down by source: application, host, login, database, object, and the combination of application + host + login + database. An optional time-bucket result shows which application dominates each slice. Deploy it to the tool database. The table may live in another database (`database.schema.table`).
+
+This is the companion to `ShowTraceProcessMap`. The process map shows runs, order, and overlap. This procedure shows who produced the busy time. Both read a table produced by `fn_trace_gettable ... INTO` or Profiler Save As Table, and both accept `QueryText` when `TextData` is absent. `Queries/ShowDecodedTrace.sql` is the row-level decode of that same kind of table.
+
+Duration is treated as microseconds and CPU as milliseconds. Displayed times are seconds. Requires SQL Server 2012 (11.x) or later and database compatibility level 110 or higher. Does not start, stop, or import a trace.
+
+```sql
+EXEC dbo.ShowTraceSourceBreakdown
+     @TraceTable = N'TraceLab.dbo.ImportedTrace';
+
+EXEC dbo.ShowTraceSourceBreakdown
+     @TraceTable      = N'dbo.ImportedTrace',
+     @StartTime       = '2026-10-08 01:00',
+     @EndTime         = '2026-10-08 03:00',
+     @ApplicationName = N'Nightly%',
+     @GroupBy         = N'Application,Host',
+     @BucketMinutes   = 15,
+     @TopN            = 50;
+```
+
+Parameters:
+
+- `@TraceTable` — required 1-, 2-, or 3-part name. Brackets are accepted. Each part is quoted with `QUOTENAME`. A missing table, a missing `StartTime` column, or a filter aimed at a missing column raises a clear error.
+- `@StartTime`, `@EndTime` — inclusive filter on event `StartTime`
+- `@DatabaseName`, `@ApplicationName`, `@LoginName`, `@HostName` — `LIKE` filters
+- `@MinDurationMs` — leave shorter work out of the totals
+- `@BucketMinutes` — size of the source-by-time buckets (default `15`). Each busy event is charged to the clock-aligned bucket where it started.
+- `@TopN` — rows kept in each breakdown, and sources kept in each time bucket (default `50`, `0` = all). Percents are still of the full busy total, so a capped list may not sum to 100.
+- `@GroupBy` — `NULL` or `All` returns every result set. A comma list such as `Application,Host` returns only those. `Overview`, `Object`, `Combined`, `Bucket`, and `Time` are accepted, as are short names (`App`, `HostName`, `LoginName`, `DatabaseName`).
+- `@ReturnOverview`, `@ReturnApplication`, `@ReturnHost`, `@ReturnLogin`, `@ReturnDatabase`, `@ReturnObject`, `@ReturnCombined`, `@ReturnBucket` — turn individual outputs off (default all on). A result set is returned only when its flag is on and `@GroupBy` names it or is left unset.
+
+A session run is one SPID + application + host + login. Audit Login starts a run. The event after Audit Logout starts the next run, so a reused SPID does not keep the previous run's grain. Idle-gap splitting stays in `ShowTraceProcessMap`. Database is not part of the session.
+
+Busy time does not double-count. For each session run it uses `RPC:Completed` and `SQL:BatchCompleted` (10, 12) when that run has them; otherwise statement events (41, 45); otherwise `SP:Completed` (43). Audit Logout duration is how long the session was connected, not work, and is never added in. The overview `BusyRule` column states the rule that was used. If `EventClass` is missing, every row with a duration counts, and the note says a batch and its statements would both be included.
+
+Missing source columns are reported on the overview (`HasApplicationName` and the other `Has*` columns) and grouped as `(not in trace)`. A present column with a NULL or blank value is grouped as `(blank)`. Names longer than 128 characters are stored at 128. Statement text is kept in full (`nvarchar(max)`, including an `ntext` source) so two long statements that differ only after the first few thousand characters stay apart.
+
+When `ObjectName` is present, that object is one row and `StatementText` is the normalized statement that used the most time inside it. When `ObjectName` is empty, each normalized statement is its own row. Normalization matches `ShowTraceProcessMap`: quoted literals and digits become `?`. This is not a SQL parser.
+
+The trace is read once into a staging table created in the procedure (not inside `sp_executesql`).
+
+Result sets:
+
+1. Overview — trace window, event count, busy seconds, CPU, reads, writes, rows, distinct sources, which source columns exist, and `BusyRule`
+2. By application — event count, total / average / max seconds, CPU seconds, reads, writes, rows, percent of busy duration, percent of busy CPU, first and last seen, distinct SPIDs
+3. By host — same measures
+4. By login — same measures
+5. By database — same measures
+6. By object — `ObjectName`, the top normalized statement (or the statement itself when the object is empty), and the same measures
+7. Combined — application + host + login + database, and the same measures
+8. By time bucket — which application dominates each `@BucketMinutes` slice, with rank in the bucket and percent of that bucket
+
+`ShowTraceSourceBreakdown` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own.
 
 ### StopPerformanceTrace
 

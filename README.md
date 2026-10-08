@@ -101,6 +101,7 @@ GO
 :r PerformanceTuningFramework\ShowRestoreHealth.sql
 :r PerformanceTuningFramework\RecommendClusteredIndex.sql
 :r PerformanceTuningFramework\ShowTraceProcessMap.sql
+:r PerformanceTuningFramework\ShowTraceSourceBreakdown.sql
 ```
 
 In SSMS, open each `.sql` file and execute it against `dba` instead of using `:r` if you prefer.
@@ -184,6 +185,7 @@ The `PerformanceTuningFramework` folder is the most actively developed area. It 
 | `StopPerformanceTrace` | `StopPerformanceTrace.sql` | Stop trace and import results |
 | `ShowTraceInfo` | `ShowTraceInfo.sql` | Trace status and imported event stats |
 | `ShowTraceProcessMap` | `ShowTraceProcessMap.sql` | Process map of an imported SQL Trace table: runs, order, overlap, Gantt, top statements |
+| `ShowTraceSourceBreakdown` | `ShowTraceSourceBreakdown.sql` | Where the busy time in an imported SQL Trace came from: application, host, login, database, object |
 | `ShowTraceWritablePaths` | `ShowTraceWritablePaths.sql` | Valid paths for trace file output |
 | `ShowBackupHealth` | `ShowBackupHealth.sql` | Instance backup-health diagnostic: in-progress backups, last FULL/DIFF/LOG per database, backup jobs, and ranked findings |
 | `ShowRestoreHealth` | `ShowRestoreHealth.sql` | Instance restore-health diagnostic: in-progress restores, database state, last restore, restore jobs, and ranked findings |
@@ -299,9 +301,15 @@ EXEC dbo.ShowTraceProcessMap
      @TraceTable    = N'dbo.PerformanceTraceResults',
      @BucketMinutes = 5,
      @GapSeconds    = 60;
+
+-- Where that busy time came from.
+EXEC dbo.ShowTraceSourceBreakdown
+     @TraceTable = N'dbo.PerformanceTraceResults',
+     @GroupBy    = N'Application,Host,Database',
+     @TopN       = 0;
 ```
 
-`Queries/ShowDecodedTrace.sql` is the row-level decode of a generic imported trace. `ShowTraceProcessMap` is the process view of that same kind of table.
+`Queries/ShowDecodedTrace.sql` is the row-level decode of a generic imported trace. `ShowTraceProcessMap` is the process view of that same kind of table. `ShowTraceSourceBreakdown` is the source view (application, host, login, database, object) and uses the same busy-event rule.
 
 `ShowTraceInfo` reports traces started by this framework. The instance default trace and any black-box trace are read directly from their rollover files by `ShowBlackBoxTraces` in `Procedures/` (see [General Procedures](#general-procedures)).
 
@@ -452,7 +460,7 @@ Standalone scripts in `Queries/` for one-off investigation (not wrapped as proce
 | Recent poor-performing queries | `RecentPoorPerformingQueries.sql` |
 | Linked server tables | `ShowLinkedServerTables` |
 | Recovery model stats | `RecoveryStats` |
-| Decode a generic imported SQL Trace table (set @TraceTable). For processes, overlap, and a Gantt, use `ShowTraceProcessMap` | `ShowDecodedTrace.sql` |
+| Decode a generic imported SQL Trace table (set @TraceTable). For processes, overlap, and a Gantt, use `ShowTraceProcessMap`. For application, host, login, database, and object, use `ShowTraceSourceBreakdown` | `ShowDecodedTrace.sql` |
 
 ---
 

@@ -18,8 +18,10 @@
   This script is a row-level decode, ordered by duration. For the batch-process
   picture (who ran, in what order, what overlapped, and where the time went),
   deploy PerformanceTuningFramework/ShowTraceProcessMap.sql and execute
-  dbo.ShowTraceProcessMap. That procedure accepts the same kind of imported
-  table, including a three-part name.
+  dbo.ShowTraceProcessMap. For where the work came from (application, host,
+  login, database, and object), deploy ShowTraceSourceBreakdown.sql and execute
+  dbo.ShowTraceSourceBreakdown. Both accept the same kind of imported table,
+  including a three-part name.
 
   Requires VIEW SERVER STATE (sys.trace_events).
 */

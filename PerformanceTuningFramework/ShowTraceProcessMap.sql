@@ -27,6 +27,9 @@
   can be passed as @TraceTable (filter by time if that table holds many traces).
 
   Queries/ShowDecodedTrace.sql is the row-level decode of the same kind of table.
+  dbo.ShowTraceSourceBreakdown is the companion breakdown of where that work
+  came from (application, host, login, database, and object). It uses the
+  same busy-event rule.
 */
 
 SET ANSI_NULLS ON
