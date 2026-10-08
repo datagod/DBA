@@ -948,6 +948,8 @@ Schema: `http://schemas.microsoft.com/sqlserver/reporting/2008/01/reportdefiniti
 
 The first open in current SSMS failed before any query ran: `Deserialization failed: true is not a valid value` on `ChartAxis` `Visible`. The 2008 XSD types that element as a string, so schema validation accepts lowercase `true`. The report viewer deserializes it as `ChartVisibleTypes`, whose members are `Auto`, `True`, and `False`. Every `ChartAxis` `Visible` value in this file is `True`. The same pass fixed the other chart enums the viewer rejects the same way: major grid line `Enabled` is `ChartGridLinesEnabledTypes` (`True`, not `true`), and legend `Position` is `ChartPositions` (`BottomCenter`, not `Bottom`). Boolean chart properties stay lowercase `true` or `false`: `Reverse`, `Scalar`, `IncludeZero`, `PreventWordWrap`, `LabelsAutoFitDisabled`, and `DockOutsideChartArea`.
 
+The next open in current SSMS got past the chart enums and failed while compiling filters: `A FilterValue for tablix 'tblAppSteps' refers to a report item. Report items cannot be used in filters.` The local viewer rejects `ReportItems` in every filter. The 2008 schema does not. Those filters, and the hidden key text boxes that existed only to feed them, are gone. Application, host, login, and database rows are summaries. The process list is every process. Steps are one tablix on the steps dataset: an application group, then a process group, then the step. Expanding a row uses `ToggleItem` on a text box in that same tablix, so no filter reads a report item.
+
 Parameters you are prompted for:
 
 - **Trace table** — required. Same 1-, 2-, or 3-part name the procedures accept, for example `dbo.ImportedTrace` or `TraceLab.dbo.ImportedTrace`.
@@ -963,11 +965,12 @@ What the report shows. Times are seconds.
 - A header and a strip for the trace window, elapsed seconds, busy seconds, process count, and the top application.
 - A range bar chart of each process from `FirstStart` to `LastEnd`, in start order, colored by application. The earliest process is at the top. The tooltip has elapsed seconds, busy percent, and the main statement.
 - A stacked column chart of busy seconds per bucket, by application.
-- Tables by application, host, login, and database. The `#` marks are that row's percent of busy time. The first row is marked heaviest.
-- A process list in start order, and a top-statements table. Statement text is truncated to one line. Hover a statement for a longer preview.
-- Expand an application row, or a process row, for steps. Expand a host, login, or database row for the processes that match. A database row matches the process primary database (where that process spent the most busy time). Steps do not carry host, login, or database.
+- Tables by application, host, login, and database. The `#` marks are that row's percent of busy time. The first row is marked heaviest. These tables are summaries.
+- A process list in start order. The process label includes SPID, application, host, and login. The database column is the primary database, where that process spent the most busy time.
+- Steps by application. Expand an application to see its processes, then expand a process to see its steps. The list is every step for the current filters, not a top-N cut. Statement text is one line. Hover a statement for a longer preview.
+- A top-statements table. Statement text is truncated to one line. Hover a statement for a longer preview.
 
-Each dataset calls a procedure with `@Return*` and, for the source report, `@GroupBy`, so the set that dataset needs is the first result set. `@ReturnOverview` still returns a second event-class set after the overview; the viewer reads only the first. The report does not use subreports. Detail is the expand toggle, because SSMS custom reports cannot host a subreport, and a drill-through file would not receive the Object Explorer parameters on its own.
+Each dataset calls a procedure with `@Return*` and, for the source report, `@GroupBy`, so the set that dataset needs is the first result set. `@ReturnOverview` still returns a second event-class set after the overview; the viewer reads only the first. The report does not use subreports. SSMS custom reports cannot host a subreport, and a drill-through file would not receive the Object Explorer parameters on its own. The steps expand stays inside the steps tablix for that reason.
 
 The report runs the procedures once per dataset (overview, processes, steps, top statements, four source tables, and the bucket chart). On a large trace that costs more than a single grid execution. Both procedures must already exist in the clicked database. Requirements are otherwise the same as the procedures: SQL Server 2012 (11.x) or later, compatibility level 110 or higher.
 
