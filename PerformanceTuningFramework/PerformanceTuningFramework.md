@@ -6,7 +6,7 @@ SQL Server scripts and utilities for database performance analysis and tuning. D
 
 This framework lives in the `PerformanceTuningFramework` folder of the DBA repository. Each script is designed to be version-aware where possible and to produce output that is easy to read in SSMS or an Azure DevOps wiki.
 
-Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped. `ShowTraceProcessMap` reads any imported SQL Trace table and shows which processes ran, in what order, and where the time went. `ShowTraceSourceBreakdown` is the companion view of that same table by application, host, login, database, and object.
+Procedures run from one tool database and read metadata from a target database passed as a parameter. Index usage results are stored in `IndexAnalysis` for later querying; Query Store reporting is text output only. `ShowQueryStoreWorkloadReport` scans all eligible databases on the instance. Server-side performance traces are stored in `PerformanceTraceResults` when stopped. `ShowTraceProcessMap` reads any imported SQL Trace table and shows which processes ran, in what order, and where the time went. `ShowTraceSourceBreakdown` is the companion view of that same table by application, host, login, database, and object. `Reports/TraceProcessMap.rdl` is the SSMS custom report over both procedures.
 
 ## Tables
 
@@ -869,7 +869,7 @@ Result sets:
 7. Mermaid `gantt` — one row, one `nvarchar(max)` column to paste into Markdown. Capped at the 50 processes with the most busy time; `MermaidNote` says when the cap applied
 8. Top statements — normalized text, executions, total and average seconds, CPU, reads, writes, first/last seen, and which processes ran it
 
-`ShowTraceProcessMap` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own. For where the busy time came from, use `ShowTraceSourceBreakdown`.
+`ShowTraceProcessMap` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own. For where the busy time came from, use `ShowTraceSourceBreakdown`. `Reports/TraceProcessMap.rdl` charts both.
 
 ### ShowTraceSourceBreakdown
 
@@ -928,6 +928,46 @@ Result sets:
 8. By time bucket — which application dominates each `@BucketMinutes` slice, with rank in the bucket and percent of that bucket
 
 `ShowTraceSourceBreakdown` has no dependency on `PerformanceTraceResults.sql`. It can be deployed on its own.
+
+### Trace process map report
+
+File: `Reports/TraceProcessMap.rdl`
+
+SSMS custom report for `dbo.ShowTraceProcessMap` and `dbo.ShowTraceSourceBreakdown`. Open it from the database where those procedures are deployed.
+
+How to open it:
+
+1. Deploy both procedures to the tool database. The trace table may live in another database on the same instance. The report runs in the database you click.
+2. In Object Explorer, right-click that database, then select **Reports** > **Custom Reports**.
+3. Select `TraceProcessMap.rdl`.
+4. The first time it opens, SSMS adds it to the recent custom-report list for that node.
+
+SSMS renders the file in its local report viewer and uses the Object Explorer connection. The connection string stored in the report (`Data Source=.`) is ignored. The report cannot be added to the standard report list, and it does not support subreports.
+
+Schema: `http://schemas.microsoft.com/sqlserver/reporting/2008/01/reportdefinition`. That definition has the range bar chart and tablix used here. DataBar and Sparkline report items arrived in the 2008 R2 / 2010 schema, so share-of-time marks are a row of `#` characters and the time series is the stacked column chart. SSMS 2008 and SSMS 2008 R2 use the SQL Server 2005 local report engine and reject this namespace. The ReportViewer control in Visual Studio 2010 and later processes 2008 RDL in local mode, which is what current SSMS uses. This file has been checked against the 2008 schema. It has not been opened in SSMS.
+
+Parameters you are prompted for:
+
+- **Trace table** — required. Same 1-, 2-, or 3-part name the procedures accept, for example `dbo.ImportedTrace` or `TraceLab.dbo.ImportedTrace`.
+- **Start time** and **End time** — optional. Leave them Null for no time filter. They filter event `StartTime` and are inclusive.
+- **Database name (LIKE)** — optional. This is the report parameter `DatabaseFilter`. It is passed to the procedure parameter `@DatabaseName`. It is not named `DatabaseName` in the report, because SSMS already supplies `DatabaseName` as the Object Explorer database, and that value would replace a filter of the same name. Leave it Null for every database. A blank value is not allowed: the procedure treats `''` as a real `LIKE` filter and returns no rows.
+- **Application name (LIKE)** — optional, same Null rule.
+- **Bucket minutes** — integer, default 15, must be 1 or greater. The stacked chart keeps the top 8 applications in each bucket so the series stay readable. The source tables still use the procedure default of 50 rows.
+
+SSMS also fills these hidden parameters from the node you clicked: `ObjectName`, `ObjectTypeName`, `Filtered`, `ServerName`, `FontName` (default Tahoma), and `DatabaseName`. `ServerName` and `DatabaseName` are shown in the header. `DatabaseName` is the database context, not the trace-column filter. Click the database that contains the two procedures. A server node leaves `DatabaseName` empty and the procedures will not resolve.
+
+What the report shows. Times are seconds.
+
+- A header and a strip for the trace window, elapsed seconds, busy seconds, process count, and the top application.
+- A range bar chart of each process from `FirstStart` to `LastEnd`, in start order, colored by application. The earliest process is at the top. The tooltip has elapsed seconds, busy percent, and the main statement.
+- A stacked column chart of busy seconds per bucket, by application.
+- Tables by application, host, login, and database. The `#` marks are that row's percent of busy time. The first row is marked heaviest.
+- A process list in start order, and a top-statements table. Statement text is truncated to one line. Hover a statement for a longer preview.
+- Expand an application row, or a process row, for steps. Expand a host, login, or database row for the processes that match. A database row matches the process primary database (where that process spent the most busy time). Steps do not carry host, login, or database.
+
+Each dataset calls a procedure with `@Return*` and, for the source report, `@GroupBy`, so the set that dataset needs is the first result set. `@ReturnOverview` still returns a second event-class set after the overview; the viewer reads only the first. The report does not use subreports. Detail is the expand toggle, because SSMS custom reports cannot host a subreport, and a drill-through file would not receive the Object Explorer parameters on its own.
+
+The report runs the procedures once per dataset (overview, processes, steps, top statements, four source tables, and the bucket chart). On a large trace that costs more than a single grid execution. Both procedures must already exist in the clicked database. Requirements are otherwise the same as the procedures: SQL Server 2012 (11.x) or later, compatibility level 110 or higher.
 
 ### StopPerformanceTrace
 
