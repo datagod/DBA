@@ -941,6 +941,7 @@ How to open it:
 2. In Object Explorer, right-click that database, then select **Reports** > **Custom Reports**.
 3. Select `TraceProcessMap.rdl`.
 4. The first time it opens, SSMS adds it to the recent custom-report list for that node.
+5. The report opens on a list of imported trace tables. Click a table name to run the map. Both procedures must already exist in the database you clicked.
 
 SSMS renders the file in its local report viewer and uses the Object Explorer connection. The connection string stored in the report (`Data Source=.`) is ignored. The report cannot be added to the standard report list, and it does not support subreports.
 
@@ -952,15 +953,25 @@ The next open in current SSMS got past the chart enums and failed while compilin
 
 The open after that failed on the Gantt chart: `The Group expression for the grouping 'GanttProcess' refers to the field 'ProcessId'.` `ProcessId` is a field of the process dataset. The failure was the wrapper tablix `tblReport`, bound to `Overview`, with every chart and table nested in its cells. In the local viewer a nested data region stays in the outer tablix's dataset, so its own `DataSetName` does not expose the other dataset's fields. `tblReport` is gone. The title, KPI strip, charts, and tables sit in the body, inside rectangles that are layout containers only. Each chart and table is bound directly to its own dataset. Text outside a data region reads overview fields with `First(..., "Overview")`. Sections are stacked with a gap between them. Interactive height is still 0, so SSMS shows the report as one scroll.
 
-Parameters you are prompted for:
+SSMS custom reports do not display a parameter prompt. An earlier build left `TraceTable` with no default, so the procedure raised `@TraceTable is required` as soon as the report compiled. Every parameter now has a default, and the report renders on open. `TraceTable` defaults to an empty string. Start time, end time, the database `LIKE`, and the application `LIKE` default to Null. Bucket minutes stays 15.
 
-- **Trace table** — required. Same 1-, 2-, or 3-part name the procedures accept, for example `dbo.ImportedTrace` or `TraceLab.dbo.ImportedTrace`.
-- **Start time** and **End time** — optional. Leave them Null for no time filter. They filter event `StartTime` and are inclusive.
-- **Database name (LIKE)** — optional. This is the report parameter `DatabaseFilter`. It is passed to the procedure parameter `@DatabaseName`. It is not named `DatabaseName` in the report, because SSMS already supplies `DatabaseName` as the Object Explorer database, and that value would replace a filter of the same name. Leave it Null for every database. A blank value is not allowed: the procedure treats `''` as a real `LIKE` filter and returns no rows.
+With `TraceTable` empty, the report shows the title, one instruction line, and the trace-table list. The KPI strip, notes, charts, and other tables are hidden. The trace datasets do not call the procedures. Each command is static SQL, because a custom report cannot use an expression as command text and a query parameter cannot use an operator: if `@TraceTable` is null or blank, the batch returns that dataset's columns with `WHERE 1 = 0`; otherwise it runs the procedure. `@TraceTable` is still the single report parameter `Parameters!TraceTable.Value`.
+
+The list runs in the database the report was opened from. It keeps user tables that have `EventClass` and `StartTime`, plus `TextData` or `Duration`. The name is schema-qualified (`[dbo].[ImportedTrace]`). The row count is `sys.partitions.rows` for the heap or clustered index, not a scan of the table. Min and max `StartTime` are read only for the tables that remain after the cap. Other online databases this login can read (`HAS_DBACCESS` = 1) are included as three-part names (`[TraceLab].[dbo].[ImportedTrace]`), at most 24 databases, and the whole list is capped at 40 tables. The current database comes first, then the largest row counts. A table that only has `EventClass` is not listed. After a table is chosen, this dataset returns no rows and does not walk the catalogs. A permission error on another database skips that database.
+
+Clicking a table name drills through to this same report. `ReportName` is `TraceProcessMap`, with no `.rdl` suffix. Microsoft Learn, in "Unsuppress Run Custom Report Warnings", documents that a link in a custom report opens another custom report, and that the warning dialog shows the full path of the drill-through `.rdl`. SSMS resolves that name to a file of the same name in the same folder, so `TraceProcessMap` is this file. The custom-report limitations page forbids subreports. It does not forbid drill-through. The action passes `TraceTable` and every other parameter, including the hidden Object Explorer parameters. SSMS fills those node values only for the report opened from Object Explorer; the drill-through open does not receive them again unless this report passes them. The loaded report also has a "Choose another table" link that drills through with an empty `TraceTable` and keeps the other parameters.
+
+The picker and the analysis sections share the area under the title. Only one of those sets is visible. Hidden items keep their design positions, so the table list can sit above a blank scroll where the charts and tables would be.
+
+Parameters, all defaulted:
+
+- **Trace table** — empty until a table is clicked. Same 1-, 2-, or 3-part name the procedures accept, for example `[dbo].[ImportedTrace]` or `[TraceLab].[dbo].[ImportedTrace]`. The procedures strip brackets before they parse the name.
+- **Start time** and **End time** — optional. Null means no time filter. They filter event `StartTime` and are inclusive.
+- **Database name (LIKE)** — optional. This is the report parameter `DatabaseFilter`. It is passed to the procedure parameter `@DatabaseName`. It is not named `DatabaseName` in the report, because SSMS already supplies `DatabaseName` as the Object Explorer database, and that value would replace a filter of the same name. Null means every database. The default is Null, not blank: the procedure treats `''` as a real `LIKE` filter and returns no rows.
 - **Application name (LIKE)** — optional, same Null rule.
 - **Bucket minutes** — integer, default 15, must be 1 or greater. The stacked chart keeps the top 8 applications in each bucket so the series stay readable. The source tables still use the procedure default of 50 rows.
 
-SSMS also fills these hidden parameters from the node you clicked: `ObjectName`, `ObjectTypeName`, `Filtered`, `ServerName`, `FontName` (default Tahoma), and `DatabaseName`. `ServerName` and `DatabaseName` are shown in the header. `DatabaseName` is the database context, not the trace-column filter. Click the database that contains the two procedures. A server node leaves `DatabaseName` empty and the procedures will not resolve.
+SSMS also fills these hidden parameters from the node you clicked: `ObjectName`, `ObjectTypeName`, `Filtered`, `ServerName`, `FontName` (default Tahoma), and `DatabaseName`. `ServerName` and `DatabaseName` are shown in the header. `DatabaseName` is the database context, not the trace-column filter. Click the database that contains the two procedures. A server node leaves `DatabaseName` empty and the procedures will not resolve. The drill-through action passes these values on, because the next open does not get them from the node.
 
 What the report shows. Times are seconds.
 
@@ -972,9 +983,9 @@ What the report shows. Times are seconds.
 - Steps by application. Expand an application to see its processes, then expand a process to see its steps. The list is every step for the current filters, not a top-N cut. Statement text is one line. Hover a statement for a longer preview.
 - A top-statements table. Statement text is truncated to one line. Hover a statement for a longer preview.
 
-Each dataset calls a procedure with `@Return*` and, for the source report, `@GroupBy`, so the set that dataset needs is the first result set. `@ReturnOverview` still returns a second event-class set after the overview; the viewer reads only the first. The report does not use subreports. SSMS custom reports cannot host a subreport, and a drill-through file would not receive the Object Explorer parameters on its own. The steps expand stays inside the steps tablix for that reason.
+Each analysis dataset calls a procedure with `@Return*` and, for the source report, `@GroupBy`, so the set that dataset needs is the first result set. `@ReturnOverview` still returns a second event-class set after the overview; the viewer reads only the first. The report does not use subreports. The table list uses drill-through to this same file, and that action passes the Object Explorer parameters. The steps expand stays inside the steps tablix.
 
-The report runs the procedures once per dataset (overview, processes, steps, top statements, four source tables, and the bucket chart). On a large trace that costs more than a single grid execution. Both procedures must already exist in the clicked database. Requirements are otherwise the same as the procedures: SQL Server 2012 (11.x) or later, compatibility level 110 or higher.
+After a table is chosen, the report runs the procedures once per analysis dataset (overview, processes, steps, top statements, four source tables, and the bucket chart). The table-list dataset returns no rows on that open. On a large trace the nine procedure calls cost more than a single grid execution. With no table selected, those nine commands return an empty typed result and the list query is the only one that reads catalog and trace tables. Both procedures must already exist in the clicked database. Requirements are otherwise the same as the procedures: SQL Server 2012 (11.x) or later, compatibility level 110 or higher.
 
 ### StopPerformanceTrace
 

@@ -56,7 +56,23 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceProcessMap
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    TraceTable     = CONVERT(nvarchar(1000), NULL),
+    CapturedFrom   = CONVERT(datetime, NULL),
+    CapturedTo     = CONVERT(datetime, NULL),
+    ElapsedSeconds = CONVERT(decimal(18, 3), NULL),
+    EventCount     = CONVERT(int, NULL),
+    ProcessCount   = CONVERT(int, NULL),
+    BusySeconds    = CONVERT(decimal(18, 3), NULL),
+    BusyCpuSeconds = CONVERT(decimal(18, 3), NULL),
+    DurationNote   = CONVERT(nvarchar(max), NULL),
+    BusyRule       = CONVERT(nvarchar(max), NULL),
+    FilterNote     = CONVERT(nvarchar(max), NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceProcessMap
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -128,7 +144,32 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceProcessMap
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    ProcessId       = CONVERT(int, NULL),
+    FirstStart      = CONVERT(datetime, NULL),
+    LastEnd         = CONVERT(datetime, NULL),
+    ElapsedSeconds  = CONVERT(decimal(18, 3), NULL),
+    BusySeconds     = CONVERT(decimal(18, 3), NULL),
+    BusyPercent     = CONVERT(decimal(9, 1), NULL),
+    CpuSeconds      = CONVERT(decimal(18, 3), NULL),
+    Reads           = CONVERT(bigint, NULL),
+    Writes          = CONVERT(bigint, NULL),
+    RowCounts       = CONVERT(bigint, NULL),
+    WorkEventCount  = CONVERT(int, NULL),
+    MaxConcurrent   = CONVERT(int, NULL),
+    SPID            = CONVERT(int, NULL),
+    ApplicationName = CONVERT(nvarchar(128), NULL),
+    HostName        = CONVERT(nvarchar(128), NULL),
+    LoginName       = CONVERT(nvarchar(128), NULL),
+    PrimaryDatabase = CONVERT(nvarchar(128), NULL),
+    MainObject      = CONVERT(nvarchar(128), NULL),
+    MainStatement   = CONVERT(nvarchar(400), NULL),
+    ProcessLabel    = CONVERT(nvarchar(500), NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceProcessMap
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -227,7 +268,24 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceProcessMap
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    ProcessId       = CONVERT(int, NULL),
+    StepNum         = CONVERT(int, NULL),
+    ProcessLabel    = CONVERT(nvarchar(500), NULL),
+    SPID            = CONVERT(int, NULL),
+    ApplicationName = CONVERT(nvarchar(128), NULL),
+    FirstStart      = CONVERT(datetime, NULL),
+    LastEnd         = CONVERT(datetime, NULL),
+    Executions      = CONVERT(int, NULL),
+    BusySeconds     = CONVERT(decimal(18, 3), NULL),
+    EventName       = CONVERT(nvarchar(128), NULL),
+    StatementText   = CONVERT(nvarchar(max), NULL),
+    ObjectName      = CONVERT(nvarchar(128), NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceProcessMap
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -302,7 +360,21 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceProcessMap
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    StatementText   = CONVERT(nvarchar(max), NULL),
+    ObjectName      = CONVERT(nvarchar(128), NULL),
+    Executions      = CONVERT(int, NULL),
+    TotalSeconds    = CONVERT(decimal(18, 3), NULL),
+    AvgSeconds      = CONVERT(decimal(18, 3), NULL),
+    TotalCpuSeconds = CONVERT(decimal(18, 3), NULL),
+    FirstSeen       = CONVERT(datetime, NULL),
+    LastSeen        = CONVERT(datetime, NULL),
+    ProcessCount    = CONVERT(int, NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceProcessMap
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -368,7 +440,22 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceSourceBreakdown
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    ApplicationName   = CONVERT(nvarchar(128), NULL),
+    EventCount        = CONVERT(int, NULL),
+    TotalSeconds      = CONVERT(decimal(18, 3), NULL),
+    AvgSeconds        = CONVERT(decimal(18, 3), NULL),
+    MaxSeconds        = CONVERT(decimal(18, 3), NULL),
+    PercentOfDuration = CONVERT(decimal(9, 1), NULL),
+    PercentOfCpu      = CONVERT(decimal(9, 1), NULL),
+    FirstSeen         = CONVERT(datetime, NULL),
+    LastSeen          = CONVERT(datetime, NULL),
+    DistinctSpids     = CONVERT(int, NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceSourceBreakdown
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -440,7 +527,22 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceSourceBreakdown
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    HostName          = CONVERT(nvarchar(128), NULL),
+    EventCount        = CONVERT(int, NULL),
+    TotalSeconds      = CONVERT(decimal(18, 3), NULL),
+    AvgSeconds        = CONVERT(decimal(18, 3), NULL),
+    MaxSeconds        = CONVERT(decimal(18, 3), NULL),
+    PercentOfDuration = CONVERT(decimal(9, 1), NULL),
+    PercentOfCpu      = CONVERT(decimal(9, 1), NULL),
+    FirstSeen         = CONVERT(datetime, NULL),
+    LastSeen          = CONVERT(datetime, NULL),
+    DistinctSpids     = CONVERT(int, NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceSourceBreakdown
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -512,7 +614,22 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceSourceBreakdown
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    LoginName         = CONVERT(nvarchar(128), NULL),
+    EventCount        = CONVERT(int, NULL),
+    TotalSeconds      = CONVERT(decimal(18, 3), NULL),
+    AvgSeconds        = CONVERT(decimal(18, 3), NULL),
+    MaxSeconds        = CONVERT(decimal(18, 3), NULL),
+    PercentOfDuration = CONVERT(decimal(9, 1), NULL),
+    PercentOfCpu      = CONVERT(decimal(9, 1), NULL),
+    FirstSeen         = CONVERT(datetime, NULL),
+    LastSeen          = CONVERT(datetime, NULL),
+    DistinctSpids     = CONVERT(int, NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceSourceBreakdown
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -584,7 +701,22 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceSourceBreakdown
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    DatabaseName      = CONVERT(nvarchar(128), NULL),
+    EventCount        = CONVERT(int, NULL),
+    TotalSeconds      = CONVERT(decimal(18, 3), NULL),
+    AvgSeconds        = CONVERT(decimal(18, 3), NULL),
+    MaxSeconds        = CONVERT(decimal(18, 3), NULL),
+    PercentOfDuration = CONVERT(decimal(9, 1), NULL),
+    PercentOfCpu      = CONVERT(decimal(9, 1), NULL),
+    FirstSeen         = CONVERT(datetime, NULL),
+    LastSeen          = CONVERT(datetime, NULL),
+    DistinctSpids     = CONVERT(int, NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceSourceBreakdown
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -656,7 +788,20 @@ End Function
       <Query>
         <DataSourceName>TraceData</DataSourceName>
         <CommandType>Text</CommandType>
-        <CommandText>EXEC dbo.ShowTraceSourceBreakdown
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NULL
+SELECT
+    BucketStart             = CONVERT(datetime, NULL),
+    BucketEnd               = CONVERT(datetime, NULL),
+    RankInBucket            = CONVERT(int, NULL),
+    ApplicationName         = CONVERT(nvarchar(128), NULL),
+    EventCount              = CONVERT(int, NULL),
+    TotalSeconds            = CONVERT(decimal(18, 3), NULL),
+    PercentOfBucketDuration = CONVERT(decimal(9, 1), NULL),
+    PercentOfDuration       = CONVERT(decimal(9, 1), NULL)
+WHERE 1 = 0
+ELSE
+EXEC dbo.ShowTraceSourceBreakdown
     @TraceTable = @TraceTable,
     @StartTime = @StartTime,
     @EndTime = @EndTime,
@@ -723,30 +868,253 @@ End Function
         </Field>
       </Fields>
     </DataSet>
+    <DataSet Name="TraceTables">
+      <Query>
+        <DataSourceName>TraceData</DataSourceName>
+        <CommandType>Text</CommandType>
+        <CommandText>SET NOCOUNT ON;
+IF NULLIF(@TraceTable, N'') IS NOT NULL
+    SELECT
+        TraceTable   = CONVERT(nvarchar(400), NULL),
+        [RowCount]   = CONVERT(bigint, NULL),
+        MinStartTime = CONVERT(datetime, NULL),
+        MaxStartTime = CONVERT(datetime, NULL),
+        IsCurrent    = CONVERT(bit, NULL)
+    WHERE 1 = 0
+ELSE
+BEGIN
+    CREATE TABLE #Candidate
+    (
+        FullName     nvarchar(400) NOT NULL PRIMARY KEY,
+        [RowCount]   bigint        NOT NULL,
+        IsCurrent    bit           NOT NULL,
+        MinStartTime datetime      NULL,
+        MaxStartTime datetime      NULL
+    );
+
+    INSERT INTO #Candidate (FullName, [RowCount], IsCurrent)
+    SELECT
+        QUOTENAME(s.name) + N'.' + QUOTENAME(t.name),
+        SUM(CONVERT(bigint, p.rows)),
+        1
+    FROM sys.tables AS t
+    INNER JOIN sys.schemas AS s
+        ON s.schema_id = t.schema_id
+    INNER JOIN sys.partitions AS p
+        ON p.object_id = t.object_id
+       AND p.index_id IN (0, 1)
+    WHERE t.is_ms_shipped = 0
+      AND EXISTS (
+            SELECT 1
+            FROM sys.columns AS c
+            WHERE c.object_id = t.object_id
+              AND c.name COLLATE Latin1_General_CI_AS = N'EventClass')
+      AND EXISTS (
+            SELECT 1
+            FROM sys.columns AS c
+            WHERE c.object_id = t.object_id
+              AND c.name COLLATE Latin1_General_CI_AS = N'StartTime')
+      AND (
+            EXISTS (
+                SELECT 1
+                FROM sys.columns AS c
+                WHERE c.object_id = t.object_id
+                  AND c.name COLLATE Latin1_General_CI_AS = N'TextData')
+            OR EXISTS (
+                SELECT 1
+                FROM sys.columns AS c
+                WHERE c.object_id = t.object_id
+                  AND c.name COLLATE Latin1_General_CI_AS = N'Duration')
+          )
+    GROUP BY s.name, t.name;
+
+    DECLARE @db sysname;
+    DECLARE @sql nvarchar(max);
+    DECLARE dbs CURSOR LOCAL FAST_FORWARD FOR
+        SELECT TOP (24) d.name
+        FROM sys.databases AS d
+        WHERE d.database_id > 4
+          AND d.state = 0
+          AND NOT (d.name = DB_NAME())
+          AND HAS_DBACCESS(d.name) = 1
+        ORDER BY d.name;
+
+    OPEN dbs;
+    FETCH NEXT FROM dbs INTO @db;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY
+            SET @sql = N'
+INSERT INTO #Candidate (FullName, [RowCount], IsCurrent)
+SELECT TOP (40)
+    QUOTENAME(@db) + N''.'' + QUOTENAME(s.name) + N''.'' + QUOTENAME(t.name),
+    SUM(CONVERT(bigint, p.rows)),
+    0
+FROM ' + QUOTENAME(@db) + N'.sys.tables AS t
+INNER JOIN ' + QUOTENAME(@db) + N'.sys.schemas AS s
+    ON s.schema_id = t.schema_id
+INNER JOIN ' + QUOTENAME(@db) + N'.sys.partitions AS p
+    ON p.object_id = t.object_id
+   AND p.index_id IN (0, 1)
+WHERE t.is_ms_shipped = 0
+  AND EXISTS (
+        SELECT 1
+        FROM ' + QUOTENAME(@db) + N'.sys.columns AS c
+        WHERE c.object_id = t.object_id
+          AND c.name COLLATE Latin1_General_CI_AS = N''EventClass'')
+  AND EXISTS (
+        SELECT 1
+        FROM ' + QUOTENAME(@db) + N'.sys.columns AS c
+        WHERE c.object_id = t.object_id
+          AND c.name COLLATE Latin1_General_CI_AS = N''StartTime'')
+  AND (
+        EXISTS (
+            SELECT 1
+            FROM ' + QUOTENAME(@db) + N'.sys.columns AS c
+            WHERE c.object_id = t.object_id
+              AND c.name COLLATE Latin1_General_CI_AS = N''TextData'')
+        OR EXISTS (
+            SELECT 1
+            FROM ' + QUOTENAME(@db) + N'.sys.columns AS c
+            WHERE c.object_id = t.object_id
+              AND c.name COLLATE Latin1_General_CI_AS = N''Duration'')
+      )
+  AND NOT EXISTS (
+        SELECT 1
+        FROM #Candidate AS already
+        WHERE already.FullName = QUOTENAME(@db) + N''.'' + QUOTENAME(s.name) + N''.'' + QUOTENAME(t.name))
+GROUP BY s.name, t.name
+ORDER BY SUM(CONVERT(bigint, p.rows)) DESC, s.name, t.name;';
+            EXEC sp_executesql @sql, N'@db sysname', @db = @db;
+        END TRY
+        BEGIN CATCH
+        END CATCH;
+        FETCH NEXT FROM dbs INTO @db;
+    END
+    CLOSE dbs;
+    DEALLOCATE dbs;
+
+    ;WITH Ranked AS
+    (
+        SELECT
+            FullName,
+            rn = ROW_NUMBER() OVER (ORDER BY IsCurrent DESC, [RowCount] DESC, FullName)
+        FROM #Candidate
+    )
+    DELETE c
+    FROM #Candidate AS c
+    INNER JOIN Ranked AS r
+        ON r.FullName = c.FullName
+    WHERE r.rn > 40;
+
+    DECLARE @full nvarchar(400);
+    DECLARE @min datetime;
+    DECLARE @max datetime;
+    DECLARE tables CURSOR LOCAL FAST_FORWARD FOR
+        SELECT FullName FROM #Candidate;
+    OPEN tables;
+    FETCH NEXT FROM tables INTO @full;
+    WHILE @@FETCH_STATUS = 0
+    BEGIN
+        BEGIN TRY
+            SET @min = NULL;
+            SET @max = NULL;
+            SET @sql = N'SELECT @min = MIN(StartTime), @max = MAX(StartTime) FROM ' + @full + N' WITH (NOLOCK);';
+            EXEC sp_executesql
+                @sql,
+                N'@min datetime OUTPUT, @max datetime OUTPUT',
+                @min = @min OUTPUT,
+                @max = @max OUTPUT;
+            UPDATE #Candidate
+            SET MinStartTime = @min,
+                MaxStartTime = @max
+            WHERE FullName = @full;
+        END TRY
+        BEGIN CATCH
+        END CATCH;
+        FETCH NEXT FROM tables INTO @full;
+    END
+    CLOSE tables;
+    DEALLOCATE tables;
+
+    SELECT
+        TraceTable   = FullName,
+        [RowCount],
+        MinStartTime,
+        MaxStartTime,
+        IsCurrent
+    FROM #Candidate
+    ORDER BY IsCurrent DESC, [RowCount] DESC, FullName;
+END</CommandText>
+        <QueryParameters>
+          <QueryParameter Name="@TraceTable">
+            <Value DataType="String">=Parameters!TraceTable.Value</Value>
+          </QueryParameter>
+        </QueryParameters>
+        <Timeout>600</Timeout>
+      </Query>
+      <Fields>
+        <Field Name="TraceTable">
+          <DataField>TraceTable</DataField>
+        </Field>
+        <Field Name="RowCount">
+          <DataField>RowCount</DataField>
+        </Field>
+        <Field Name="MinStartTime">
+          <DataField>MinStartTime</DataField>
+        </Field>
+        <Field Name="MaxStartTime">
+          <DataField>MaxStartTime</DataField>
+        </Field>
+        <Field Name="IsCurrent">
+          <DataField>IsCurrent</DataField>
+        </Field>
+      </Fields>
+    </DataSet>
   </DataSets>
   <ReportParameters>
     <ReportParameter Name="TraceTable">
       <DataType>String</DataType>
-      <Nullable>false</Nullable>
-      <AllowBlank>false</AllowBlank>
+      <Nullable>true</Nullable>
+      <DefaultValue>
+        <Values>
+          <Value />
+        </Values>
+      </DefaultValue>
+      <AllowBlank>true</AllowBlank>
       <Prompt>Trace table</Prompt>
       <UsedInQuery>True</UsedInQuery>
     </ReportParameter>
     <ReportParameter Name="StartTime">
       <DataType>DateTime</DataType>
       <Nullable>true</Nullable>
+      <DefaultValue>
+        <Values>
+          <Value>=Nothing</Value>
+        </Values>
+      </DefaultValue>
       <Prompt>Start time</Prompt>
       <UsedInQuery>True</UsedInQuery>
     </ReportParameter>
     <ReportParameter Name="EndTime">
       <DataType>DateTime</DataType>
       <Nullable>true</Nullable>
+      <DefaultValue>
+        <Values>
+          <Value>=Nothing</Value>
+        </Values>
+      </DefaultValue>
       <Prompt>End time</Prompt>
       <UsedInQuery>True</UsedInQuery>
     </ReportParameter>
     <ReportParameter Name="DatabaseFilter">
       <DataType>String</DataType>
       <Nullable>true</Nullable>
+      <DefaultValue>
+        <Values>
+          <Value>=Nothing</Value>
+        </Values>
+      </DefaultValue>
       <AllowBlank>false</AllowBlank>
       <Prompt>Database name (LIKE)</Prompt>
       <UsedInQuery>True</UsedInQuery>
@@ -754,6 +1122,11 @@ End Function
     <ReportParameter Name="ApplicationName">
       <DataType>String</DataType>
       <Nullable>true</Nullable>
+      <DefaultValue>
+        <Values>
+          <Value>=Nothing</Value>
+        </Values>
+      </DefaultValue>
       <AllowBlank>false</AllowBlank>
       <Prompt>Application name (LIKE)</Prompt>
       <UsedInQuery>True</UsedInQuery>
@@ -860,7 +1233,7 @@ End Function
           <Top>0in</Top>
           <Left>0in</Left>
           <Height>0.36in</Height>
-          <Width>7.1in</Width>
+          <Width>4.00in</Width>
           <Style>
             <FontFamily>=Parameters!FontName.Value</FontFamily>
             <FontSize>18pt</FontSize>
@@ -878,6 +1251,86 @@ End Function
               <TextRuns>
                 <TextRun>
                   <Value>Trace process map</Value>
+                </TextRun>
+              </TextRuns>
+            </Paragraph>
+          </Paragraphs>
+          <CanGrow>false</CanGrow>
+          <CanShrink>false</CanShrink>
+          <KeepTogether>true</KeepTogether>
+        </Textbox>
+        <Textbox Name="txtChangeTable">
+          <Visibility>
+            <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+          </Visibility>
+          <ActionInfo>
+            <Actions>
+              <Action>
+                <Drillthrough>
+                  <ReportName>TraceProcessMap</ReportName>
+                        <Parameters>
+                          <Parameter Name="TraceTable">
+                            <Value />
+                          </Parameter>
+                          <Parameter Name="StartTime">
+                            <Value>=Parameters!StartTime.Value</Value>
+                          </Parameter>
+                          <Parameter Name="EndTime">
+                            <Value>=Parameters!EndTime.Value</Value>
+                          </Parameter>
+                          <Parameter Name="DatabaseFilter">
+                            <Value>=Parameters!DatabaseFilter.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ApplicationName">
+                            <Value>=Parameters!ApplicationName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="BucketMinutes">
+                            <Value>=Parameters!BucketMinutes.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ObjectName">
+                            <Value>=Parameters!ObjectName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ObjectTypeName">
+                            <Value>=Parameters!ObjectTypeName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="Filtered">
+                            <Value>=Parameters!Filtered.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ServerName">
+                            <Value>=Parameters!ServerName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="FontName">
+                            <Value>=Parameters!FontName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="DatabaseName">
+                            <Value>=Parameters!DatabaseName.Value</Value>
+                          </Parameter>
+                        </Parameters>
+                </Drillthrough>
+              </Action>
+            </Actions>
+          </ActionInfo>
+          <Top>0in</Top>
+          <Left>4.10in</Left>
+          <Height>0.36in</Height>
+          <Width>2.90in</Width>
+          <Style>
+            <FontFamily>=Parameters!FontName.Value</FontFamily>
+            <FontSize>9pt</FontSize>
+            <TextAlign>Left</TextAlign>
+            <VerticalAlign>Middle</VerticalAlign>
+            <Color>#1F4E79</Color>
+            <TextDecoration>Underline</TextDecoration>
+            <PaddingLeft>2pt</PaddingLeft>
+            <PaddingRight>2pt</PaddingRight>
+            <PaddingTop>1pt</PaddingTop>
+            <PaddingBottom>1pt</PaddingBottom>
+          </Style>
+          <Paragraphs>
+            <Paragraph>
+              <TextRuns>
+                <TextRun>
+                  <Value>Choose another table</Value>
                 </TextRun>
               </TextRuns>
             </Paragraph>
@@ -935,7 +1388,7 @@ End Function
             <Paragraph>
               <TextRuns>
                 <TextRun>
-                  <Value>="Table " &amp; Code.Clip(Parameters!TraceTable.Value, 70) &amp; "    Database LIKE " &amp; IIf(IsNothing(Parameters!DatabaseFilter.Value), "(all)", Code.Clip(Parameters!DatabaseFilter.Value, 40)) &amp; "    Application LIKE " &amp; IIf(IsNothing(Parameters!ApplicationName.Value), "(all)", Code.Clip(Parameters!ApplicationName.Value, 40)) &amp; "    Buckets " &amp; CStr(Parameters!BucketMinutes.Value) &amp; " min"</Value>
+                  <Value>=IIf(IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = "", "Click a table name. Listed tables have EventClass and StartTime, plus TextData or Duration.", "Table " &amp; Code.Clip(Parameters!TraceTable.Value, 70) &amp; "    Database LIKE " &amp; IIf(IsNothing(Parameters!DatabaseFilter.Value), "(all)", Code.Clip(Parameters!DatabaseFilter.Value, 40)) &amp; "    Application LIKE " &amp; IIf(IsNothing(Parameters!ApplicationName.Value), "(all)", Code.Clip(Parameters!ApplicationName.Value, 40)) &amp; "    Buckets " &amp; CStr(Parameters!BucketMinutes.Value) &amp; " min")</Value>
                 </TextRun>
               </TextRuns>
             </Paragraph>
@@ -946,7 +1399,455 @@ End Function
         </Textbox>
       </ReportItems>
     </Rectangle>
+    <Rectangle Name="rectPicker">
+      <Visibility>
+        <Hidden>=Not (IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = "")</Hidden>
+      </Visibility>
+      <KeepTogether>false</KeepTogether>
+      <Top>0.82in</Top>
+      <Left>0.00in</Left>
+      <Height>1.20in</Height>
+      <Width>10.50in</Width>
+      <ZIndex>1</ZIndex>
+      <ReportItems>
+        <Textbox Name="txtPickHead">
+          <Top>0in</Top>
+          <Left>0in</Left>
+          <Height>0.28in</Height>
+          <Width>10.5in</Width>
+          <Style>
+            <FontFamily>=Parameters!FontName.Value</FontFamily>
+            <FontSize>11pt</FontSize>
+            <FontWeight>Bold</FontWeight>
+            <TextAlign>Left</TextAlign>
+            <VerticalAlign>Middle</VerticalAlign>
+            <Color>#1F4E79</Color>
+            <PaddingLeft>2pt</PaddingLeft>
+            <PaddingRight>2pt</PaddingRight>
+            <PaddingTop>1pt</PaddingTop>
+            <PaddingBottom>1pt</PaddingBottom>
+          </Style>
+          <Paragraphs>
+            <Paragraph>
+              <TextRuns>
+                <TextRun>
+                  <Value>Trace tables</Value>
+                </TextRun>
+              </TextRuns>
+            </Paragraph>
+          </Paragraphs>
+          <CanGrow>false</CanGrow>
+          <CanShrink>false</CanShrink>
+          <KeepTogether>true</KeepTogether>
+        </Textbox>
+        <Tablix Name="tblTraceTables">
+          <Top>0.34in</Top>
+          <Left>0.00in</Left>
+          <Height>0.50in</Height>
+          <Width>10.5in</Width>
+          <DataSetName>TraceTables</DataSetName>
+          <NoRowsMessage>No user tables with EventClass and StartTime, plus TextData or Duration, were found in this database or in the other online databases this login can read.</NoRowsMessage>
+          <TablixBody>
+            <TablixColumns>
+              <TablixColumn>
+                <Width>5.70in</Width>
+              </TablixColumn>
+              <TablixColumn>
+                <Width>1.20in</Width>
+              </TablixColumn>
+              <TablixColumn>
+                <Width>1.80in</Width>
+              </TablixColumn>
+              <TablixColumn>
+                <Width>1.80in</Width>
+              </TablixColumn>
+            </TablixColumns>
+            <TablixRows>
+              <TablixRow>
+                <Height>0.26in</Height>
+                <TablixCells>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickH0">
+                        <Style>
+                          <Border>
+                            <Color>#1F4E79</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>#1F4E79</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <FontWeight>Bold</FontWeight>
+                          <TextAlign>Center</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>White</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>Trace table</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickH1">
+                        <Style>
+                          <Border>
+                            <Color>#1F4E79</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>#1F4E79</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <FontWeight>Bold</FontWeight>
+                          <TextAlign>Center</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>White</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>Rows</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickH2">
+                        <Style>
+                          <Border>
+                            <Color>#1F4E79</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>#1F4E79</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <FontWeight>Bold</FontWeight>
+                          <TextAlign>Center</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>White</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>First start</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickH3">
+                        <Style>
+                          <Border>
+                            <Color>#1F4E79</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>#1F4E79</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <FontWeight>Bold</FontWeight>
+                          <TextAlign>Center</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>White</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>Last start</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                </TablixCells>
+              </TablixRow>
+              <TablixRow>
+                <Height>0.24in</Height>
+                <TablixCells>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickTable">
+                <ActionInfo>
+                  <Actions>
+                    <Action>
+                      <Drillthrough>
+                        <ReportName>TraceProcessMap</ReportName>
+                        <Parameters>
+                          <Parameter Name="TraceTable">
+                            <Value>=Fields!TraceTable.Value</Value>
+                          </Parameter>
+                          <Parameter Name="StartTime">
+                            <Value>=Parameters!StartTime.Value</Value>
+                          </Parameter>
+                          <Parameter Name="EndTime">
+                            <Value>=Parameters!EndTime.Value</Value>
+                          </Parameter>
+                          <Parameter Name="DatabaseFilter">
+                            <Value>=Parameters!DatabaseFilter.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ApplicationName">
+                            <Value>=Parameters!ApplicationName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="BucketMinutes">
+                            <Value>=Parameters!BucketMinutes.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ObjectName">
+                            <Value>=Parameters!ObjectName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ObjectTypeName">
+                            <Value>=Parameters!ObjectTypeName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="Filtered">
+                            <Value>=Parameters!Filtered.Value</Value>
+                          </Parameter>
+                          <Parameter Name="ServerName">
+                            <Value>=Parameters!ServerName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="FontName">
+                            <Value>=Parameters!FontName.Value</Value>
+                          </Parameter>
+                          <Parameter Name="DatabaseName">
+                            <Value>=Parameters!DatabaseName.Value</Value>
+                          </Parameter>
+                        </Parameters>
+                      </Drillthrough>
+                    </Action>
+                  </Actions>
+                </ActionInfo>
+                        <Style>
+                          <Border>
+                            <Color>#D0D7E2</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>White</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <TextAlign>Left</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>#1F4E79</Color>
+                          <TextDecoration>Underline</TextDecoration>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>=Fields!TraceTable.Value</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>true</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickRows">
+                        <Style>
+                          <Border>
+                            <Color>#D0D7E2</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>White</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <TextAlign>Right</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>#333333</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>=Code.Fmt(Fields!RowCount.Value, "#,0")</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickMin">
+                        <Style>
+                          <Border>
+                            <Color>#D0D7E2</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>White</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <TextAlign>Left</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>#333333</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>=Code.Fmt(Fields!MinStartTime.Value, "yyyy-MM-dd HH:mm:ss")</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                  <TablixCell>
+                    <CellContents>
+                      <Textbox Name="txtPickMax">
+                        <Style>
+                          <Border>
+                            <Color>#D0D7E2</Color>
+                            <Style>Solid</Style>
+                            <Width>0.5pt</Width>
+                          </Border>
+                          <BackgroundColor>White</BackgroundColor>
+                          <FontFamily>=Parameters!FontName.Value</FontFamily>
+                          <FontSize>8pt</FontSize>
+                          <TextAlign>Left</TextAlign>
+                          <VerticalAlign>Middle</VerticalAlign>
+                          <Color>#333333</Color>
+                          <PaddingLeft>2pt</PaddingLeft>
+                          <PaddingRight>2pt</PaddingRight>
+                          <PaddingTop>1pt</PaddingTop>
+                          <PaddingBottom>1pt</PaddingBottom>
+                        </Style>
+                        <Paragraphs>
+                          <Paragraph>
+                            <TextRuns>
+                              <TextRun>
+                                <Value>=Code.Fmt(Fields!MaxStartTime.Value, "yyyy-MM-dd HH:mm:ss")</Value>
+                              </TextRun>
+                            </TextRuns>
+                          </Paragraph>
+                        </Paragraphs>
+                        <CanGrow>false</CanGrow>
+                        <CanShrink>false</CanShrink>
+                        <KeepTogether>true</KeepTogether>
+                      </Textbox>
+                    </CellContents>
+                  </TablixCell>
+                </TablixCells>
+              </TablixRow>
+            </TablixRows>
+          </TablixBody>
+          <TablixColumnHierarchy>
+            <TablixMembers>
+              <TablixMember />
+              <TablixMember />
+              <TablixMember />
+              <TablixMember />
+            </TablixMembers>
+          </TablixColumnHierarchy>
+          <TablixRowHierarchy>
+            <TablixMembers>
+              <TablixMember>
+                <KeepWithGroup>After</KeepWithGroup>
+                <RepeatOnNewPage>true</RepeatOnNewPage>
+                <KeepTogether>true</KeepTogether>
+              </TablixMember>
+              <TablixMember>
+                <Group Name="PickTraceTable">
+                  <GroupExpressions>
+                    <GroupExpression>=Fields!TraceTable.Value</GroupExpression>
+                  </GroupExpressions>
+                </Group>
+                <SortExpressions>
+                  <SortExpression>
+                    <Value>=Fields!IsCurrent.Value</Value>
+                    <Direction>Descending</Direction>
+                  </SortExpression>
+                  <SortExpression>
+                    <Value>=Fields!RowCount.Value</Value>
+                    <Direction>Descending</Direction>
+                  </SortExpression>
+                </SortExpressions>
+              </TablixMember>
+            </TablixMembers>
+          </TablixRowHierarchy>
+        </Tablix>
+      </ReportItems>
+    </Rectangle>
     <Rectangle Name="rectKpi">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
       <Top>0.82in</Top>
       <Left>0.00in</Left>
       <KeepTogether>true</KeepTogether>
@@ -1136,6 +2037,9 @@ End Function
       </ReportItems>
     </Rectangle>
     <Textbox Name="txtNotes">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
       <Top>1.66in</Top>
       <Left>0.00in</Left>
       <Height>0.62in</Height>
@@ -1165,6 +2069,9 @@ End Function
       <KeepTogether>true</KeepTogether>
     </Textbox>
     <Rectangle Name="rectGantt">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtGanttHead">
           <Top>0.00in</Top>
@@ -1407,6 +2314,9 @@ End Function
         <Width>10.50in</Width>
       </Rectangle>
     <Rectangle Name="rectBuckets">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtBucketHead">
           <Top>0.00in</Top>
@@ -1645,6 +2555,9 @@ End Function
         <Width>10.50in</Width>
       </Rectangle>
     <Rectangle Name="rectSources">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtSourceHead">
           <Top>0.00in</Top>
@@ -4805,6 +5718,9 @@ End Function
         <Width>10.50in</Width>
       </Rectangle>
     <Rectangle Name="rectProcesses">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtProcHead">
           <Top>0.00in</Top>
@@ -5677,6 +6593,9 @@ End Function
         <Width>10.50in</Width>
       </Rectangle>
     <Rectangle Name="rectSteps">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtStepHead">
           <Top>0.00in</Top>
@@ -7152,6 +8071,9 @@ End Function
         <Width>10.50in</Width>
       </Rectangle>
     <Rectangle Name="rectStatements">
+      <Visibility>
+        <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
+      </Visibility>
         <ReportItems>
         <Textbox Name="txtStmtHead">
           <Top>0.00in</Top>
