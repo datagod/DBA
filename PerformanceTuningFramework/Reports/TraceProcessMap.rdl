@@ -41,6 +41,33 @@ Public Function Fmt(ByVal value As Object, ByVal formatText As String) As String
     If IsNothing(value) Then Return ""
     Return Format(value, formatText)
 End Function
+
+Public Function QuoteIdent(ByVal name As String) As String
+    Return "[" &amp; Replace(name, "]", "]]") &amp; "]"
+End Function
+
+Public Function TraceTableFromContext(ByVal objectType As Object, ByVal objectName As Object) As String
+    Dim t As String
+    Dim n As String
+    Dim parts() As String
+    Dim i As Integer
+    Dim built As String
+    If IsNothing(objectType) OrElse IsNothing(objectName) Then Return ""
+    t = Trim(CStr(objectType))
+    n = Trim(CStr(objectName))
+    If Len(n) = 0 Then Return ""
+    If StrComp(t, "Table", CompareMethod.Text) &lt;&gt; 0 AndAlso StrComp(t, "UserTable", CompareMethod.Text) &lt;&gt; 0 Then Return ""
+    n = Replace(Replace(n, "[", ""), "]", "")
+    If InStr(n, ".") = 0 Then n = "dbo." &amp; n
+    parts = Split(n, ".")
+    built = ""
+    For i = 0 To UBound(parts)
+        If Len(Trim(parts(i))) = 0 Then Return ""
+        If Len(built) &gt; 0 Then built = built &amp; "."
+        built = built &amp; QuoteIdent(Trim(parts(i)))
+    Next
+    Return built
+End Function
 </Code>
   <DataSources>
     <DataSource Name="TraceData">
@@ -1078,7 +1105,7 @@ END</CommandText>
       <Nullable>true</Nullable>
       <DefaultValue>
         <Values>
-          <Value />
+          <Value>=Code.TraceTableFromContext(Parameters!ObjectTypeName.Value, Parameters!ObjectName.Value)</Value>
         </Values>
       </DefaultValue>
       <AllowBlank>true</AllowBlank>
@@ -1233,7 +1260,7 @@ END</CommandText>
           <Top>0in</Top>
           <Left>0in</Left>
           <Height>0.36in</Height>
-          <Width>4.00in</Width>
+          <Width>7.1in</Width>
           <Style>
             <FontFamily>=Parameters!FontName.Value</FontFamily>
             <FontSize>18pt</FontSize>
@@ -1251,86 +1278,6 @@ END</CommandText>
               <TextRuns>
                 <TextRun>
                   <Value>Trace process map</Value>
-                </TextRun>
-              </TextRuns>
-            </Paragraph>
-          </Paragraphs>
-          <CanGrow>false</CanGrow>
-          <CanShrink>false</CanShrink>
-          <KeepTogether>true</KeepTogether>
-        </Textbox>
-        <Textbox Name="txtChangeTable">
-          <Visibility>
-            <Hidden>=IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = ""</Hidden>
-          </Visibility>
-          <ActionInfo>
-            <Actions>
-              <Action>
-                <Drillthrough>
-                  <ReportName>TraceProcessMap</ReportName>
-                        <Parameters>
-                          <Parameter Name="TraceTable">
-                            <Value />
-                          </Parameter>
-                          <Parameter Name="StartTime">
-                            <Value>=Parameters!StartTime.Value</Value>
-                          </Parameter>
-                          <Parameter Name="EndTime">
-                            <Value>=Parameters!EndTime.Value</Value>
-                          </Parameter>
-                          <Parameter Name="DatabaseFilter">
-                            <Value>=Parameters!DatabaseFilter.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ApplicationName">
-                            <Value>=Parameters!ApplicationName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="BucketMinutes">
-                            <Value>=Parameters!BucketMinutes.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ObjectName">
-                            <Value>=Parameters!ObjectName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ObjectTypeName">
-                            <Value>=Parameters!ObjectTypeName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="Filtered">
-                            <Value>=Parameters!Filtered.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ServerName">
-                            <Value>=Parameters!ServerName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="FontName">
-                            <Value>=Parameters!FontName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="DatabaseName">
-                            <Value>=Parameters!DatabaseName.Value</Value>
-                          </Parameter>
-                        </Parameters>
-                </Drillthrough>
-              </Action>
-            </Actions>
-          </ActionInfo>
-          <Top>0in</Top>
-          <Left>4.10in</Left>
-          <Height>0.36in</Height>
-          <Width>2.90in</Width>
-          <Style>
-            <FontFamily>=Parameters!FontName.Value</FontFamily>
-            <FontSize>9pt</FontSize>
-            <TextAlign>Left</TextAlign>
-            <VerticalAlign>Middle</VerticalAlign>
-            <Color>#1F4E79</Color>
-            <TextDecoration>Underline</TextDecoration>
-            <PaddingLeft>2pt</PaddingLeft>
-            <PaddingRight>2pt</PaddingRight>
-            <PaddingTop>1pt</PaddingTop>
-            <PaddingBottom>1pt</PaddingBottom>
-          </Style>
-          <Paragraphs>
-            <Paragraph>
-              <TextRuns>
-                <TextRun>
-                  <Value>Choose another table</Value>
                 </TextRun>
               </TextRuns>
             </Paragraph>
@@ -1388,7 +1335,7 @@ END</CommandText>
             <Paragraph>
               <TextRuns>
                 <TextRun>
-                  <Value>=IIf(IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = "", "Click a table name. Listed tables have EventClass and StartTime, plus TextData or Duration.", "Table " &amp; Code.Clip(Parameters!TraceTable.Value, 70) &amp; "    Database LIKE " &amp; IIf(IsNothing(Parameters!DatabaseFilter.Value), "(all)", Code.Clip(Parameters!DatabaseFilter.Value, 40)) &amp; "    Application LIKE " &amp; IIf(IsNothing(Parameters!ApplicationName.Value), "(all)", Code.Clip(Parameters!ApplicationName.Value, 40)) &amp; "    Buckets " &amp; CStr(Parameters!BucketMinutes.Value) &amp; " min")</Value>
+                  <Value>=IIf(IsNothing(Parameters!TraceTable.Value) Or Parameters!TraceTable.Value = "", "No table selected. Listed tables have EventClass and StartTime, plus TextData or Duration.", "Table " &amp; Code.Clip(Parameters!TraceTable.Value, 70) &amp; "    Database LIKE " &amp; IIf(IsNothing(Parameters!DatabaseFilter.Value), "(all)", Code.Clip(Parameters!DatabaseFilter.Value, 40)) &amp; "    Application LIKE " &amp; IIf(IsNothing(Parameters!ApplicationName.Value), "(all)", Code.Clip(Parameters!ApplicationName.Value, 40)) &amp; "    Buckets " &amp; CStr(Parameters!BucketMinutes.Value) &amp; " min")</Value>
                 </TextRun>
               </TextRuns>
             </Paragraph>
@@ -1406,7 +1353,7 @@ END</CommandText>
       <KeepTogether>false</KeepTogether>
       <Top>0.82in</Top>
       <Left>0.00in</Left>
-      <Height>1.20in</Height>
+      <Height>1.32in</Height>
       <Width>10.50in</Width>
       <ZIndex>1</ZIndex>
       <ReportItems>
@@ -1440,8 +1387,37 @@ END</CommandText>
           <CanShrink>false</CanShrink>
           <KeepTogether>true</KeepTogether>
         </Textbox>
+        <Textbox Name="txtPickInstruct">
+          <Top>0.28in</Top>
+          <Left>0in</Left>
+          <Height>0.46in</Height>
+          <Width>10.5in</Width>
+          <Style>
+            <FontFamily>=Parameters!FontName.Value</FontFamily>
+            <FontSize>8pt</FontSize>
+            <TextAlign>Left</TextAlign>
+            <VerticalAlign>Top</VerticalAlign>
+            <Color>#333333</Color>
+            <PaddingLeft>2pt</PaddingLeft>
+            <PaddingRight>2pt</PaddingRight>
+            <PaddingTop>1pt</PaddingTop>
+            <PaddingBottom>1pt</PaddingBottom>
+          </Style>
+          <Paragraphs>
+            <Paragraph>
+              <TextRuns>
+                <TextRun>
+                  <Value>Right-click the trace table in Object Explorer &gt; Reports &gt; Custom Reports &gt; TraceProcessMap.rdl. After the first run, SSMS lists the report in the table's Reports menu under recent reports.</Value>
+                </TextRun>
+              </TextRuns>
+            </Paragraph>
+          </Paragraphs>
+          <CanGrow>false</CanGrow>
+          <CanShrink>false</CanShrink>
+          <KeepTogether>true</KeepTogether>
+        </Textbox>
         <Tablix Name="tblTraceTables">
-          <Top>0.34in</Top>
+          <Top>0.78in</Top>
           <Left>0.00in</Left>
           <Height>0.50in</Height>
           <Width>10.5in</Width>
@@ -1618,53 +1594,6 @@ END</CommandText>
                   <TablixCell>
                     <CellContents>
                       <Textbox Name="txtPickTable">
-                <ActionInfo>
-                  <Actions>
-                    <Action>
-                      <Drillthrough>
-                        <ReportName>TraceProcessMap</ReportName>
-                        <Parameters>
-                          <Parameter Name="TraceTable">
-                            <Value>=Fields!TraceTable.Value</Value>
-                          </Parameter>
-                          <Parameter Name="StartTime">
-                            <Value>=Parameters!StartTime.Value</Value>
-                          </Parameter>
-                          <Parameter Name="EndTime">
-                            <Value>=Parameters!EndTime.Value</Value>
-                          </Parameter>
-                          <Parameter Name="DatabaseFilter">
-                            <Value>=Parameters!DatabaseFilter.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ApplicationName">
-                            <Value>=Parameters!ApplicationName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="BucketMinutes">
-                            <Value>=Parameters!BucketMinutes.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ObjectName">
-                            <Value>=Parameters!ObjectName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ObjectTypeName">
-                            <Value>=Parameters!ObjectTypeName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="Filtered">
-                            <Value>=Parameters!Filtered.Value</Value>
-                          </Parameter>
-                          <Parameter Name="ServerName">
-                            <Value>=Parameters!ServerName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="FontName">
-                            <Value>=Parameters!FontName.Value</Value>
-                          </Parameter>
-                          <Parameter Name="DatabaseName">
-                            <Value>=Parameters!DatabaseName.Value</Value>
-                          </Parameter>
-                        </Parameters>
-                      </Drillthrough>
-                    </Action>
-                  </Actions>
-                </ActionInfo>
                         <Style>
                           <Border>
                             <Color>#D0D7E2</Color>
@@ -1676,8 +1605,7 @@ END</CommandText>
                           <FontSize>8pt</FontSize>
                           <TextAlign>Left</TextAlign>
                           <VerticalAlign>Middle</VerticalAlign>
-                          <Color>#1F4E79</Color>
-                          <TextDecoration>Underline</TextDecoration>
+                          <Color>#333333</Color>
                           <PaddingLeft>2pt</PaddingLeft>
                           <PaddingRight>2pt</PaddingRight>
                           <PaddingTop>1pt</PaddingTop>
