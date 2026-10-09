@@ -950,6 +950,8 @@ The first open in current SSMS failed before any query ran: `Deserialization fai
 
 The next open in current SSMS got past the chart enums and failed while compiling filters: `A FilterValue for tablix 'tblAppSteps' refers to a report item. Report items cannot be used in filters.` The local viewer rejects `ReportItems` in every filter. The 2008 schema does not. Those filters, and the hidden key text boxes that existed only to feed them, are gone. Application, host, login, and database rows are summaries. The process list is every process. Steps are one tablix on the steps dataset: an application group, then a process group, then the step. Expanding a row uses `ToggleItem` on a text box in that same tablix, so no filter reads a report item.
 
+The open after that failed on the Gantt chart: `The Group expression for the grouping 'GanttProcess' refers to the field 'ProcessId'.` `ProcessId` is a field of the process dataset. The failure was the wrapper tablix `tblReport`, bound to `Overview`, with every chart and table nested in its cells. In the local viewer a nested data region stays in the outer tablix's dataset, so its own `DataSetName` does not expose the other dataset's fields. `tblReport` is gone. The title, KPI strip, charts, and tables sit in the body, inside rectangles that are layout containers only. Each chart and table is bound directly to its own dataset. Text outside a data region reads overview fields with `First(..., "Overview")`. Sections are stacked with a gap between them. Interactive height is still 0, so SSMS shows the report as one scroll.
+
 Parameters you are prompted for:
 
 - **Trace table** — required. Same 1-, 2-, or 3-part name the procedures accept, for example `dbo.ImportedTrace` or `TraceLab.dbo.ImportedTrace`.
